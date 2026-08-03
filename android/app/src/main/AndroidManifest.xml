@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required to call the PrestaMesta API (HTTPS in testing/production,
+         HTTP only permitted in debug builds against the local emulator —
+         see android/app/src/debug/AndroidManifest.xml). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="prestamesta_app"
         android:name="${applicationName}"

@@ -43,3 +43,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Release signing — no keystore exists yet (release currently signs with the
+# debug key, see docs/release-checklist.md), but these patterns are added
+# now so a future keystore/credentials file can never be committed by
+# accident the moment it's created.
+android/key.properties
+*.jks
+*.keystore
+

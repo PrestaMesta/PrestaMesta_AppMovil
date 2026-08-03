@@ -1,30 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+
 import '../theme/app_theme.dart';
 import '../widgets/pm_bottom_nav.dart';
 import '../widgets/pm_logo.dart';
-import 'calendar_screen.dart';
-import 'home_screen.dart';
-import 'profile_screen.dart';
-import 'simulation_screen.dart';
-import 'status_screen.dart';
 
-class RootShell extends StatefulWidget {
-  const RootShell({super.key});
+/// The five-tab chrome (AppBar + bottom nav), now driven by go_router's
+/// [StatefulShellRoute.indexedStack] instead of a manually-managed
+/// `IndexedStack` index. [navigationShell] already keeps each branch's
+/// widget tree alive when switching tabs — the same "state isn't lost when
+/// you change tabs" behavior the old `IndexedStack` gave us, just owned by
+/// the router now. The five tab screens themselves are unchanged.
+class RootShell extends StatelessWidget {
+  final StatefulNavigationShell navigationShell;
 
-  @override
-  State<RootShell> createState() => _RootShellState();
-}
-
-class _RootShellState extends State<RootShell> {
-  int _index = 0;
-
-  static const _screens = [
-    HomeScreen(),
-    SimulationScreen(),
-    CalendarScreen(),
-    StatusScreen(),
-    ProfileScreen(),
-  ];
+  const RootShell({super.key, required this.navigationShell});
 
   @override
   Widget build(BuildContext context) {
@@ -35,15 +25,19 @@ class _RootShellState extends State<RootShell> {
         actions: [
           IconButton(
             onPressed: () {},
-            icon: const Icon(Icons.notifications_none_rounded, color: AppColors.textPrimary),
+            icon: const Icon(Icons.notifications_none_rounded,
+                color: AppColors.textPrimary),
           ),
           const SizedBox(width: 4),
         ],
       ),
-      body: IndexedStack(index: _index, children: _screens),
+      body: navigationShell,
       bottomNavigationBar: PmBottomNav(
-        currentIndex: _index,
-        onTap: (i) => setState(() => _index = i),
+        currentIndex: navigationShell.currentIndex,
+        onTap: (index) => navigationShell.goBranch(
+          index,
+          initialLocation: index == navigationShell.currentIndex,
+        ),
       ),
     );
   }

@@ -1,14 +1,28 @@
 import 'package:flutter/material.dart';
-import '../data/demo_data.dart';
-import '../theme/app_theme.dart';
-import '../widgets/demo_banner.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-class HomeScreen extends StatelessWidget {
+import '../core/utils/currency_formatter.dart';
+import '../features/auth/presentation/auth_controller.dart';
+import '../features/loans/data/loan_submission_response.dart';
+import '../features/loans/presentation/loan_status_label.dart';
+import '../features/loans/presentation/session_loan_summary.dart';
+import '../theme/app_theme.dart';
+
+/// Honest, real-data-only Home: a greeting from the actual authenticated
+/// client, a way into Simulación (the only real "product" surface today),
+/// and — if this session already sent a loan request — the server's own
+/// response to it. No balance, no next payment, no fabricated application
+/// status: none of that can be backed by anything the server actually
+/// returns (see `docs/mobile-api-gaps.md`).
+class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final currency = NumberFormatMxn.format(DemoData.nextPaymentAmount);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cliente = ref.watch(authControllerProvider).cliente;
+    final summary = ref.watch(sessionLoanSummaryControllerProvider);
+    final nombre = cliente?.nombre ?? '';
 
     return SafeArea(
       bottom: false,
@@ -17,9 +31,8 @@ class HomeScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Saludo
             Text(
-              'Hola, ${DemoData.userName}',
+              'Hola, $nombre',
               style: const TextStyle(
                 color: AppColors.greenEnd,
                 fontWeight: FontWeight.w600,
@@ -28,7 +41,7 @@ class HomeScreen extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             const Text(
-              'Resumen de tu préstamo',
+              'PrestaMesta',
               style: TextStyle(
                 fontSize: 28,
                 fontWeight: FontWeight.w800,
@@ -36,9 +49,13 @@ class HomeScreen extends StatelessWidget {
                 color: AppColors.textPrimary,
               ),
             ),
+            const SizedBox(height: 8),
+            const Text(
+              'Consulta nuestro catálogo de créditos, simula un monto y envía tu '
+              'solicitud en unos pasos.',
+              style: TextStyle(fontSize: 13.5, color: AppColors.textSecondary),
+            ),
             const SizedBox(height: 24),
-
-            // Próximo pago card
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(24),
@@ -49,128 +66,43 @@ class HomeScreen extends StatelessWidget {
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.greenEnd.withOpacity(0.35),
-                    blurRadius: 20,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Próximo pago (demo)',
+                    'Simular y solicitar',
                     style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    currency,
-                    style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 34,
+                      fontSize: 18,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Text(
-                    DemoData.nextPaymentDueLabel,
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 13.5,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // Estado de solicitud card
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: AppColors.card,
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: AppColors.divider),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'ESTADO DE SOLICITUD',
-                    style: TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.6,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
                   const Text(
-                    DemoData.applicationStatus,
-                    style: TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                    ),
+                    'Explora los créditos disponibles y arma tu solicitud.',
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
                   ),
                   const SizedBox(height: 16),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(20),
-                    child: LinearProgressIndicator(
-                      value: DemoData.applicationProgress,
-                      minHeight: 8,
-                      backgroundColor: AppColors.divider,
-                      valueColor: const AlwaysStoppedAnimation(AppColors.greenEnd),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: AppColors.greenEnd,
                     ),
+                    onPressed: () => context.go('/app/simulacion'),
+                    child: const Text('Ir a Simulación'),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 20),
-
-            // Saldo estimado (secundario, tomado de la vista previa del sitio)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: AppColors.navy,
-                borderRadius: BorderRadius.circular(24),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Saldo estimado (demo)',
-                        style: TextStyle(color: Colors.white60, fontSize: 13),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        NumberFormatMxn.format(DemoData.estimatedBalance),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Icon(Icons.account_balance_wallet_rounded, color: Colors.white54, size: 30),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            const DemoBanner(),
+            if (summary == null)
+              _NoSubmissionCard(
+                  onGoToSimulation: () => context.go('/app/simulacion'))
+            else
+              _SessionSummaryCard(summary: summary),
+            const SizedBox(height: 20),
+            const _AvailabilityNote(),
           ],
         ),
       ),
@@ -178,16 +110,119 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
-/// Small helper to format hardcoded MXN amounts as "$1,250 MXN".
-class NumberFormatMxn {
-  static String format(double amount) {
-    final s = amount.toStringAsFixed(0);
-    final buffer = StringBuffer();
-    final reversed = s.split('').reversed.toList();
-    for (int i = 0; i < reversed.length; i++) {
-      buffer.write(reversed[i]);
-      if ((i + 1) % 3 == 0 && i + 1 != reversed.length) buffer.write(',');
-    }
-    return '\$${buffer.toString().split('').reversed.join()} MXN';
+class _NoSubmissionCard extends StatelessWidget {
+  final VoidCallback onGoToSimulation;
+  const _NoSubmissionCard({required this.onGoToSimulation});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Aún no has enviado una solicitud durante esta sesión.',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton(
+            onPressed: onGoToSimulation,
+            child: const Text('Simular un crédito'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SessionSummaryCard extends StatelessWidget {
+  final LoanSubmissionResponse summary;
+  const _SessionSummaryCard({required this.summary});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'INFORMACIÓN RECIBIDA AL ENVIAR LA SOLICITUD',
+            style: TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            estadoPrestamoLabel(summary.estado),
+            style: const TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Monto solicitado: ${formatMoney(summary.montoSolicitado)}',
+            style:
+                const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Recibido el ${formatLoanDate(summary.fechaSolicitud)}',
+            style:
+                const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Este estado no se actualiza automáticamente porque el backend todavía no '
+            'permite consultar tus solicitudes.',
+            style: TextStyle(fontSize: 11.5, color: AppColors.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AvailabilityNote extends StatelessWidget {
+  const _AvailabilityNote();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.warningBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: const Text(
+        'El calendario de pagos y la consulta de solicitudes anteriores todavía no '
+        'están disponibles: el servidor aún no ofrece esa información.',
+        style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+      ),
+    );
   }
 }
