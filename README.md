@@ -5,17 +5,18 @@ Este proyecto es la app móvil de clientes de PrestaMesta. Empezó como solo dis
 backend real ([PrestaMesta_Server](https://github.com/PrestaMesta/PrestaMesta_Server)).
 
 **Autenticación de clientes**, el **catálogo de créditos + estimación local no autoritativa**, la
-**solicitud real de préstamo** (`POST /prestamos/solicitar`, con aval opcional) y, desde este
-checkpoint, **Inicio/Estado/Calendario/Perfil basados únicamente en datos reales** ya están
-implementados contra el contrato exacto de `PrestaMesta_Server` — no queda ningún dato ficticio en
-el flujo normal de la app; `demo_data.dart`/`DemoBanner` se eliminaron por completo (ver "Inicio,
-Estado, Calendario y Perfil" más abajo).
+**solicitud real de préstamo** (`POST /prestamos/solicitar`, con aval opcional), **los préstamos
+propios del cliente** (`GET /client/prestamos` listado paginado + `GET /client/prestamos/:id`
+detalle con aval) y **Inicio/Estado/Calendario/Perfil basados únicamente en datos reales del
+servidor** ya están implementados contra el contrato exacto de `PrestaMesta_Server` — no queda
+ningún dato ficticio en el flujo normal de la app; `demo_data.dart`/`DemoBanner` se eliminaron por
+completo (ver "Inicio, Estado, Calendario y Perfil" más abajo).
 
 Esta integración refleja el contrato actual del backend, pero **todavía no es un flujo productivo
 completo**: el backend no tiene MFA, autorización reforzada ("step-up") para operaciones sensibles,
-idempotencia de solicitudes, verificación de identidad, destino de desembolso configurable, pagos,
-ni una forma de consultar solicitudes propias después de enviarlas. Ver `docs/mobile-api-gaps.md`
-para el diseño propuesto (no implementado) de esas piezas.
+idempotencia de solicitudes, verificación de identidad, ni destino de desembolso configurable, y no
+existen pagos/amortización en absoluto. Ver `docs/mobile-api-gaps.md` para el diseño propuesto (no
+implementado) de esas piezas.
 
 Ver `docs/mobile-api-gaps.md` para el contrato real disponible en el backend y qué falta.
 
@@ -46,11 +47,17 @@ lib/
       presentation/          # credits_controller (CreditsState), widgets/ (CreditCard, catálogo)
     loans/
       data/                  # guarantor, loan_request, loan_submission_response (POST solicitar),
-                              # loans_repository (LoanSubmissionAmbiguousException incluida)
+                              # pagination, credito_resumen, loan_list_item (GET /client/prestamos),
+                              # aval_detalle, loan_detail (GET /client/prestamos/:id),
+                              # loans_repository (fetchLoans/fetchLoanById/submit,
+                              # LoanSubmissionAmbiguousException incluida)
       presentation/          # loan_draft (borrador en memoria), loan_submission_controller,
-                              # session_loan_summary (última respuesta exitosa, solo en memoria),
+                              # loans_list_controller (listado real, paginado, client-id-keyed),
+                              # loan_detail_controller (detalle real, family por id, autoDispose),
+                              # loan_detail_screen (/app/estado/:id),
                               # loan_status_label (formateo de estado/fecha compartido),
-                              # loan_review_screen, loan_confirmation_screen, widgets/GuarantorForm
+                              # loan_review_screen, loan_confirmation_screen,
+                              # widgets/GuarantorForm, widgets/LoansListView
   theme/app_theme.dart      # colores de marca (#0C222F navy + verde)
   widgets/
     pm_logo.dart            # wordmark "P PrestaMesta"
@@ -58,10 +65,10 @@ lib/
     empty_state.dart        # shell compartido para estados vacíos honestos (icono+título+mensaje+CTA)
   screens/
     root_shell.dart         # shell de go_router (StatefulShellRoute): AppBar + bottom nav
-    home_screen.dart        # Saludo real + CTA a Simulación + última solicitud de la sesión
+    home_screen.dart        # Saludo real + CTA a Simulación + préstamo más reciente del servidor
     simulation_screen.dart  # Catálogo real + estimación local
     calendar_screen.dart    # Estado vacío honesto (el backend no tiene pagos implementados)
-    status_screen.dart      # Última solicitud de la sesión, o estado vacío honesto
+    status_screen.dart      # Listado real y paginado de préstamos, o estado vacío honesto
     profile_screen.dart     # Nombre/correo reales + acción de cerrar sesión
 env/
   local.json               # APP_ENV=local + API_BASE_URL, para --dart-define-from-file
@@ -215,53 +222,73 @@ de errores general, la app también lo soporta sin cambios (ver pruebas en
 
 ## Inicio, Estado, Calendario y Perfil
 
-**Ninguna de estas cuatro pantallas usa datos ficticios.** No existe un endpoint que liste los
-préstamos de un cliente, su historial de pagos, ni un calendario de amortización — así que en vez
-de simularlos, estas pantallas muestran exactamente lo que el backend puede confirmar hoy: la
-sesión real del cliente y, si corresponde, la respuesta real del último `POST
-/prestamos/solicitar` enviado durante la sesión actual.
+**Ninguna de estas cuatro pantallas usa datos ficticios.** Inicio y Estado están construidas sobre
+los préstamos reales del cliente (`GET /client/prestamos` listado + `GET /client/prestamos/:id`
+detalle, ambos exclusivos de cliente) — **el servidor es la fuente de verdad**, no una copia local
+de lo último que devolvió el `POST /prestamos/solicitar`. Calendario sigue siendo un estado vacío
+honesto porque el backend no tiene pagos implementados en absoluto (eso sí sigue siendo cierto).
 
-**Última solicitud de la sesión (`SessionLoanSummaryController`,
-`lib/features/loans/presentation/session_loan_summary.dart`)**: guarda únicamente la
-`LoanSubmissionResponse` de la última solicitud enviada con éxito — `prestamoId`, `fechaSolicitud`,
-`montoSolicitado`, `montoTotalAPagar`, `estado`, `mensaje`. Vive **solo en memoria** (no
-`flutter_secure_storage`, no disco, no logs), se llena de forma reactiva en cuanto el envío
-resulta en éxito (sin ninguna petición adicional al servidor), nunca incluye datos del aval ni el
-borrador ni la estimación local, y se recrea vacía (igual que el catálogo y el borrador) al cerrar
-sesión o cambiar de cliente — así que no sobrevive a un reinicio de la app ni se filtra entre
-sesiones. Un fallo normal o un resultado ambiguo (`outcomeUnknown`) nunca la modifican.
+**Listado real (`loansListControllerProvider`,
+`lib/features/loans/presentation/loans_list_controller.dart`)**: mantiene la página actual de
+`PrestamoListItem` (`id`, crédito resumido, montos como `Decimal`, `estado`, fechas de solicitud/
+decisión) más la `Pagination` del servidor (`page`, `limit`, `total`, `totalPages`), con los mismos
+cinco estados explícitos que el catálogo de créditos (`initialLoading/data/initialError/refreshing/
+refreshError`). La actualización es **siempre manual** — `refresh()` (botón "Actualizar") o
+`nextPage()`/`previousPage()` (paginación real contra el servidor, orden fijo `fecha_solicitud
+DESC, id DESC`) — nunca hay sondeo automático. Está atado al id del cliente autenticado igual que
+el catálogo/el borrador, así que **cerrar sesión o iniciar sesión con otro cliente lo recrea vacío
+sin mezclar datos entre sesiones**. Cuando una solicitud se envía con éxito
+(`loanSubmissionControllerProvider` transiciona a `success`), este provider escucha esa transición
+y vuelve a pedir la página 1 automáticamente — así el listado (y por tanto Inicio) siempre refleja
+la solicitud recién creada sin que la pantalla tenga que hacer nada.
+
+**Detalle real (`loanDetailControllerProvider`,
+`lib/features/loans/presentation/loan_detail_controller.dart`)**: un provider "family" indexado por
+el id numérico del préstamo (no por cliente — se descarta automáticamente en cuanto se sale de la
+pantalla), que trae `PrestamoDetalle` (los mismos campos del listado, más `aval: AvalDetalle?` —
+`null` si el préstamo no tiene aval registrado, con sus campos completos si sí lo tiene).
+
+Todos los montos (`monto_solicitado`, `monto_total_a_pagar`, `saldo_pendiente`, `ingreso_mensual`
+del aval) se manejan como `Decimal` de principio a fin, nunca `double` — la única conversión a
+`double` ocurre en el punto exacto de formateo para mostrar en pantalla.
+
+**Sesión y errores**: un `401` (`TOKEN_EXPIRED`/`TOKEN_INVALID`) en cualquiera de estas peticiones
+cierra la sesión igual que en cualquier otra parte de la app (mismo interceptor compartido); un
+`403`, un timeout o un `500` nunca cierran la sesión — se muestran como un error recuperable
+(`initialError`/`refreshError`, con botón "Reintentar").
 
 **Inicio**: saluda con el nombre real (`ClienteSummary.nombre`), nunca muestra el `id` interno del
-cliente como dato principal, y da acceso directo a Simulación. Si existe una última solicitud de la
-sesión, la muestra etiquetada como "Información recibida al enviar la solicitud" con una nota de
-que no se actualiza sola; si no existe, muestra "Aún no has enviado una solicitud durante esta
-sesión." — nunca "No tienes préstamos", porque el backend no puede confirmar eso.
+cliente como dato principal, y da acceso directo a Simulación. Muestra el **préstamo más reciente
+recibido del listado del servidor** (`loans.first` de la página 1) con un botón "Ver detalle" hacia
+`/app/estado/:id`; si el listado está vacío, muestra "Aún no has enviado una solicitud." — nunca
+"No tienes préstamos".
 
-**Estado**: sin una solicitud en memoria, es un estado vacío honesto que explica que todavía no
-existe consulta de solicitudes propias. Con una solicitud en memoria, muestra únicamente los
-valores que el servidor devolvió (folio, monto solicitado, monto total, fecha, estado —
-`PENDIENTE` como "Pendiente de revisión", `APROBADO`/`RECHAZADO` solo si fue exactamente lo que se
-recibió), con una aclaración de que no representa una consulta actualizada. No fabrica una línea de
-tiempo, eventos de revisión, ni fechas de decisión.
+**Estado**: lista todos los préstamos reales del cliente, paginados, con botón de actualización
+manual y controles "Anterior"/"Siguiente". Tocar un préstamo abre `/app/estado/:id` con su detalle
+completo y su aval cuando existe. El estado vacío ("Aún no tienes solicitudes registradas.") incluye
+un botón hacia Simulación. Nunca fabrica una línea de tiempo, eventos de revisión, ni fechas de
+decisión que el servidor no haya devuelto.
 
 **Calendario**: un estado vacío honesto, sin excepciones — el backend no tiene pagos ni tabla de
 amortización implementados en absoluto (confirmado en `PrestaMesta_Server/CLAUDE.md`), así que ni
 siquiera se puede afirmar "sin pagos pendientes" (eso también requeriría un endpoint que no
-existe).
+existe). Esta pantalla sigue sin hacer ninguna petición de red.
 
 **Perfil**: solo `nombre` y `correo` (`ClienteSummary`, exactamente lo que devuelve
 `POST /client/auth/login`) — nunca teléfono (el login no lo devuelve), dirección, documento, score,
 ni rol. Incluye una nota informativa no interactiva sobre que la autenticación en dos pasos se
 incorporará cuando el servidor la admita — sin ningún toggle que aparente que ya está activa.
 Conserva el diálogo de confirmación de "Cerrar sesión", que limpia catálogo, borrador, confirmación
-y última solicitud de la sesión (todos recreados vacíos por el mismo patrón de providers atados al
+y listado/detalle de préstamos (todos recreados vacíos por el mismo patrón de providers atados al
 id del cliente autenticado).
 
-**Navegación**: los accesos hacia Simulación/Inicio desde estas pantallas usan `context.go(...)`,
-la misma forma en que ya navegaban `loan_review_screen.dart`/`loan_confirmation_screen.dart` — esto
-cambia de rama dentro del `StatefulShellRoute` existente sin apilar una segunda copia del shell
-(`RootShell`/`AppBar`/bottom nav). Cambiar de pestaña nunca dispara una petición HTTP ni vuelve a
-crear la última solicitud de la sesión.
+**Navegación**: los accesos hacia Simulación/Inicio/detalle desde estas pantallas usan
+`context.go(...)`, la misma forma en que ya navegaban `loan_review_screen.dart`/
+`loan_confirmation_screen.dart` — esto cambia de rama (o empuja `/app/estado/:id` como ruta anidada)
+dentro del `StatefulShellRoute` existente sin apilar una segunda copia del shell
+(`RootShell`/`AppBar`/bottom nav). Cambiar de pestaña nunca dispara una petición HTTP por sí solo:
+el listado ya se cargó una vez al llegar a Inicio, y volver a Estado reutiliza ese mismo estado
+compartido en vez de pedirlo de nuevo.
 
 ## Configuración de entornos
 

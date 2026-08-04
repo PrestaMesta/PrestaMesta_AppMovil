@@ -3,6 +3,8 @@ import 'package:dio/dio.dart';
 import '../../../core/errors/app_exception.dart';
 import '../../../core/network/auth_interceptor.dart';
 import '../../../core/network/error_mapper.dart';
+import 'loan_detail.dart';
+import 'loan_list_item.dart';
 import 'loan_request.dart';
 import 'loan_submission_response.dart';
 
@@ -124,5 +126,50 @@ class LoansRepository {
       if (requestId is String) return requestId;
     }
     return null;
+  }
+
+  /// The only thing that calls `GET /client/prestamos` — the client's own
+  /// loans, `cliente_id` derived server-side from the verified token's `sub`
+  /// claim (`verificarTokenCliente`, confirmed against
+  /// `routes/clientePrestamoRoutes.js`), never from a query parameter this
+  /// app could tamper with. No caching, no retry: a manual call every time,
+  /// same shape as [CreditsRepository.fetchCreditos].
+  Future<LoanListPage> fetchLoans(
+      {required int page, required int limit}) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/client/prestamos',
+        queryParameters: {'page': page, 'limit': limit},
+        options: Options(extra: const {requiresAuthExtraKey: true}),
+      );
+      return LoanListPage.fromJson(response.data!);
+    } on DioException catch (error) {
+      throw mapDioExceptionToAppException(error);
+    } on TypeError {
+      throw _invalidResponseException;
+    } on FormatException {
+      throw _invalidResponseException;
+    }
+  }
+
+  /// The only thing that calls `GET /client/prestamos/:id`. A 404 here
+  /// (`LOAN_NOT_FOUND`) already maps to [AppExceptionType.noEncontrado] via
+  /// [mapDioExceptionToAppException] — this app never special-cases it
+  /// further, since the server deliberately returns the exact same 404 for
+  /// "doesn't exist" and "belongs to another client" (anti-enumeration).
+  Future<PrestamoDetalle> fetchLoanById(int id) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/client/prestamos/$id',
+        options: Options(extra: const {requiresAuthExtraKey: true}),
+      );
+      return PrestamoDetalle.fromJson(response.data!);
+    } on DioException catch (error) {
+      throw mapDioExceptionToAppException(error);
+    } on TypeError {
+      throw _invalidResponseException;
+    } on FormatException {
+      throw _invalidResponseException;
+    }
   }
 }

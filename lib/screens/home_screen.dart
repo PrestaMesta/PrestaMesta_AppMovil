@@ -4,24 +4,27 @@ import 'package:go_router/go_router.dart';
 
 import '../core/utils/currency_formatter.dart';
 import '../features/auth/presentation/auth_controller.dart';
-import '../features/loans/data/loan_submission_response.dart';
+import '../features/loans/data/loan_list_item.dart';
 import '../features/loans/presentation/loan_status_label.dart';
-import '../features/loans/presentation/session_loan_summary.dart';
+import '../features/loans/presentation/loans_list_controller.dart';
+import '../features/loans/presentation/loans_list_state.dart';
 import '../theme/app_theme.dart';
 
 /// Honest, real-data-only Home: a greeting from the actual authenticated
 /// client, a way into Simulación (the only real "product" surface today),
-/// and — if this session already sent a loan request — the server's own
-/// response to it. No balance, no next payment, no fabricated application
-/// status: none of that can be backed by anything the server actually
-/// returns (see `docs/mobile-api-gaps.md`).
+/// and the client's most recent loan **as reported by the server right
+/// now** (`GET /client/prestamos`, sorted `fecha_solicitud DESC, id DESC`
+/// server-side, so the first row is always the most recent) — not a locally
+/// cached copy of whatever `POST /prestamos/solicitar` last returned. No
+/// balance, no next payment, no fabricated application-progress bar: none of
+/// that can be backed by any real endpoint (see `docs/mobile-api-gaps.md`).
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final cliente = ref.watch(authControllerProvider).cliente;
-    final summary = ref.watch(sessionLoanSummaryControllerProvider);
+    final loansState = ref.watch(loansListControllerProvider);
     final nombre = cliente?.nombre ?? '';
 
     return SafeArea(
@@ -96,11 +99,7 @@ class HomeScreen extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 20),
-            if (summary == null)
-              _NoSubmissionCard(
-                  onGoToSimulation: () => context.go('/app/simulacion'))
-            else
-              _SessionSummaryCard(summary: summary),
+            _MostRecentLoanSection(state: loansState),
             const SizedBox(height: 20),
             const _AvailabilityNote(),
           ],
@@ -110,9 +109,31 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-class _NoSubmissionCard extends StatelessWidget {
-  final VoidCallback onGoToSimulation;
-  const _NoSubmissionCard({required this.onGoToSimulation});
+class _MostRecentLoanSection extends StatelessWidget {
+  final LoansListState state;
+  const _MostRecentLoanSection({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    switch (state.status) {
+      case LoansListStatus.initialLoading:
+        return const _LoadingCard();
+      case LoansListStatus.initialError:
+        return _ErrorCard(mensaje: state.error?.mensaje);
+      case LoansListStatus.data:
+      case LoansListStatus.refreshing:
+      case LoansListStatus.refreshError:
+        final mostRecent = state.mostRecent;
+        if (mostRecent == null) {
+          return const _NoSubmissionCard();
+        }
+        return _MostRecentLoanCard(loan: mostRecent);
+    }
+  }
+}
+
+class _LoadingCard extends StatelessWidget {
+  const _LoadingCard();
 
   @override
   Widget build(BuildContext context) {
@@ -124,31 +145,73 @@ class _NoSubmissionCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: AppColors.divider),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Aún no has enviado una solicitud durante esta sesión.',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
+      child: Center(
+        child: Semantics(
+          label: 'Cargando tu préstamo más reciente',
+          child: const SizedBox(
+            height: 22,
+            width: 22,
+            child: CircularProgressIndicator(strokeWidth: 2.4),
           ),
-          const SizedBox(height: 10),
-          OutlinedButton(
-            onPressed: onGoToSimulation,
-            child: const Text('Simular un crédito'),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
-class _SessionSummaryCard extends StatelessWidget {
-  final LoanSubmissionResponse summary;
-  const _SessionSummaryCard({required this.summary});
+class _ErrorCard extends StatelessWidget {
+  final String? mensaje;
+  const _ErrorCard({required this.mensaje});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Semantics(
+        liveRegion: true,
+        child: Text(
+          mensaje ?? 'No se pudo cargar tu préstamo más reciente.',
+          style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        ),
+      ),
+    );
+  }
+}
+
+class _NoSubmissionCard extends StatelessWidget {
+  const _NoSubmissionCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: const Text(
+        'Aún no has enviado una solicitud.',
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          color: AppColors.textPrimary,
+        ),
+      ),
+    );
+  }
+}
+
+class _MostRecentLoanCard extends StatelessWidget {
+  final PrestamoListItem loan;
+  const _MostRecentLoanCard({required this.loan});
 
   @override
   Widget build(BuildContext context) {
@@ -164,7 +227,7 @@ class _SessionSummaryCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'INFORMACIÓN RECIBIDA AL ENVIAR LA SOLICITUD',
+            'TU SOLICITUD MÁS RECIENTE',
             style: TextStyle(
               color: AppColors.textSecondary,
               fontSize: 11.5,
@@ -174,7 +237,7 @@ class _SessionSummaryCard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text(
-            estadoPrestamoLabel(summary.estado),
+            estadoPrestamoLabel(loan.estado),
             style: const TextStyle(
               color: AppColors.textPrimary,
               fontSize: 18,
@@ -183,21 +246,20 @@ class _SessionSummaryCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            'Monto solicitado: ${formatMoney(summary.montoSolicitado)}',
+            'Monto solicitado: ${formatMoney(loan.montoSolicitado)}',
             style:
                 const TextStyle(fontSize: 13, color: AppColors.textSecondary),
           ),
           const SizedBox(height: 2),
           Text(
-            'Recibido el ${formatLoanDate(summary.fechaSolicitud)}',
+            'Enviada el ${formatLoanDate(loan.fechaSolicitud)}',
             style:
                 const TextStyle(fontSize: 12, color: AppColors.textSecondary),
           ),
-          const SizedBox(height: 10),
-          const Text(
-            'Este estado no se actualiza automáticamente porque el backend todavía no '
-            'permite consultar tus solicitudes.',
-            style: TextStyle(fontSize: 11.5, color: AppColors.textSecondary),
+          const SizedBox(height: 12),
+          OutlinedButton(
+            onPressed: () => context.go('/app/estado/${loan.id}'),
+            child: const Text('Ver detalle'),
           ),
         ],
       ),
@@ -219,8 +281,8 @@ class _AvailabilityNote extends StatelessWidget {
         border: Border.all(color: AppColors.divider),
       ),
       child: const Text(
-        'El calendario de pagos y la consulta de solicitudes anteriores todavía no '
-        'están disponibles: el servidor aún no ofrece esa información.',
+        'El calendario de pagos todavía no está disponible: el servidor aún no '
+        'ofrece esa información.',
         style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
       ),
     );

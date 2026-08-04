@@ -296,8 +296,8 @@ class _OutcomeUnknownView extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               const Text(
-                'Actualmente la aplicación no puede consultar solicitudes propias, así que '
-                'no podemos verificar el resultado desde aquí.',
+                'Puedes revisar la pestaña Estado para ver si esta solicitud llegó a '
+                'registrarse, pero no la reenvíes desde aquí mientras tanto.',
                 textAlign: TextAlign.center,
                 style:
                     TextStyle(fontSize: 12.5, color: AppColors.textSecondary),

@@ -12,17 +12,23 @@ doesn't support yet (MFA, identity verification, disbursement destination, payme
 documented as **not implemented on the server**, not bugs to fix here).
 
 As of the current checkpoint: client authentication, the credit catalog + a local non-authoritative
-estimate, the real loan request (`POST /prestamos/solicitar`, guarantor optional), and now
+estimate, the real loan request (`POST /prestamos/solicitar`, guarantor optional), the client's own
+loans (`GET /client/prestamos` list + `GET /client/prestamos/:id` detail, both client-only), and now
 `HomeScreen`/`StatusScreen`/`CalendarScreen`/`ProfileScreen` are all wired end-to-end through
 `lib/features/{auth,credits,loans}/` + `lib/app/` (router, Riverpod providers) — **there is no
 `DemoData` anywhere in the app anymore**; `lib/data/demo_data.dart` and `lib/widgets/demo_banner.dart`
 were deleted entirely once their last real consumers (the four screens above) were rewritten to use
-only real session data. This integration reflects the backend's *current* contract but is
-deliberately not a complete production flow — the backend has no MFA, step-up, idempotency,
-identity verification, disbursement destination, payments, or a way to query a client's own past
-loan requests; see `docs/mobile-api-gaps.md`. Don't assume a screen talks to the network just
-because `lib/core/`/a sibling feature does — `CalendarScreen` in particular makes zero network
-calls, by design, because there is nothing real for it to fetch.
+only real session/server data. `HomeScreen`/`StatusScreen` are backed by the server's own
+`GET /client/prestamos*` responses — **the server is the source of truth**, not a locally cached
+copy of the last `POST /prestamos/solicitar` response (see the "Home, Status, Calendar, Profile"
+section below for the full `loansListControllerProvider`/`loanDetailControllerProvider` story).
+This integration reflects the backend's *current* contract but is deliberately not a complete
+production flow — the backend has no MFA, step-up, idempotency, identity verification, or
+disbursement destination, and there are still no payments/amortization endpoints at all; see
+`docs/mobile-api-gaps.md`. Don't assume a screen talks to the network just because `lib/core/`/a
+sibling feature does — `CalendarScreen` in particular still makes zero network calls, by design,
+because payments genuinely don't exist on the server yet (unlike the loan list/detail, which now
+do).
 
 `PrestaMesta_Server` and `PrestaMesta_Web` are sibling repos at `../PrestaMesta_Server` and
 `../PrestaMesta_Web` — read-only reference for this repo; never edit them from here.
@@ -96,7 +102,10 @@ hand-rolled `IndexedStack`+`_index` state that used to live in `RootShell`, but 
   in `test/app/router_redirect_test.dart` — every state × location combination, no widget pump
   needed. `/app/simulacion/solicitud` (review) requires a non-null `LoanDraft`;
   `/app/simulacion/confirmacion` requires `LoanSubmissionStatus.success` — both nested under the
-  `simulacion` `StatefulShellBranch`, not separate top-level routes.
+  `simulacion` `StatefulShellBranch`, not separate top-level routes. `/app/estado/:id`
+  (`LoanDetailScreen`) is likewise nested under the `estado` branch — it needs no redirect guard
+  (unlike the two above, it doesn't depend on in-memory draft/submission state, only on the numeric
+  `:id` path segment, which the screen itself validates).
 - The five tab screens themselves (`HomeScreen`, `SimulationScreen`, `CalendarScreen`,
   `StatusScreen`, `ProfileScreen`) are unchanged by the router migration, except `ProfileScreen`
   which now also wires the "Cerrar sesión" tile to `authControllerProvider.notifier.logout()`.
@@ -366,8 +375,8 @@ See `test/screens/simulation_screen_test.dart` for both patterns side by side.
     just the bare class) in
     `test/features/loans/presentation/loan_submission_block_reset_test.dart`: logout + a fresh
     login lands on a brand new, `idle` controller for the (re-)authenticated client id — the block
-    is lifted by the same client-id-keyed recreation as the draft/session-summary, never by a
-    dedicated reset call.
+    is lifted by the same client-id-keyed recreation as the draft/loans list (see
+    `loansListControllerProvider` below), never by a dedicated reset call.
   - Guards every `state = ...` assignment with `if (!mounted) return;` — a `TOKEN_EXPIRED`/
     `TOKEN_INVALID` on the in-flight submission can concurrently dispose this same
     client-id-keyed controller (via `sessionRejectedByServer`) before the `await` above it
@@ -397,40 +406,103 @@ See `test/screens/simulation_screen_test.dart` for both patterns side by side.
 
 ## Home, Status, Calendar, Profile (`lib/screens/`)
 
-- `presentation/session_loan_summary.dart` (in `lib/features/loans/`, not `lib/screens/` — it's
-  loans-feature state, just consumed by these screens): `SessionLoanSummaryController` holds only
-  the most recent **successful** `LoanSubmissionResponse` from this session — `null` means "nothing
-  succeeded yet." It's populated **reactively**, not by any screen explicitly writing to it: the
-  `sessionLoanSummaryControllerProvider`'s `create` callback does `ref.listen` on
-  `loanSubmissionControllerProvider` and copies the response over only on a transition into
-  `LoanSubmissionStatus.success` — no extra network request is ever made to build this state, and a
-  `failure`/`outcomeUnknown` submission never touches it. Client-id-keyed exactly like
-  `loanDraftControllerProvider`/`creditsControllerProvider` (`ref.watch(authControllerProvider
-  .select((s) => s.cliente?.id))` inside `create`), so it's recreated empty on logout or a
-  different client logging in — the same mechanism, no separate "clear on logout" call needed
-  anywhere. **In memory only**: no `flutter_secure_storage`, no disk, no logs, gone on app restart.
-  It carries no aval data and is never recalculated — every field is exactly what the server
-  returned. Because Riverpod providers only observe transitions from the moment something actively
-  watches them (see the doc comment on this file for the full reasoning, including why
-  `ProviderContainer.listen` — not a one-off `read` — is required in tests), this depends on
-  `HomeScreen` being watched early; `authRedirect` always landing a fresh session on `/app/inicio`
-  first is what guarantees that in practice.
+Home and Estado are backed by the client's real loans on the server
+(`GET /client/prestamos`/`GET /client/prestamos/:id`) — **the server is the single source of
+truth**. There is no session-only local cache of "the last thing the POST returned" anymore (the
+old `SessionLoanSummaryController` was deleted once these two real endpoints existed): a loan
+submitted successfully is only ever shown after the app re-fetches the list from the server, and
+nothing about it survives only in memory — a fresh `GET` on the next app run (or the next login)
+shows the same data the server has, not "whatever this session happened to submit."
+
+- `data/pagination.dart`: `Pagination` (`page`, `limit`, `total`, `totalPages`) — the exact
+  envelope both `GET /client/prestamos` and `GET /admin/prestamos` return (`totalPages` is `0`
+  only when `total` is `0`, confirmed against `services/prestamoService.js#construirPaginacion`).
+- `data/credito_resumen.dart`: `CreditoResumen` (`id`, `nombre`) — the minimal credit view nested
+  inside a loan list/detail row. Deliberately **not** the full `Credito` catalog model
+  (`features/credits/data/credit_model.dart`): the loans endpoints never return
+  `monto_minimo`/`monto_maximo`/`tasa_interes_anual`/`plazo_meses`, so this app must not pretend it
+  has them here.
+- `data/loan_list_item.dart`: `PrestamoListItem` (`id`, `credito: CreditoResumen`,
+  `montoSolicitado`/`montoTotalAPagar`/`saldoPendiente` as `Decimal`, `estado: EstadoPrestamo`
+  reused from `loan_submission_response.dart`, `fechaSolicitud`, nullable `fechaDecision`) — one row
+  of the list. Also holds `LoanListPage` (`data: List<PrestamoListItem>` + `pagination:
+  Pagination`), the full body of `GET /client/prestamos`. `monto_solicitado`/`monto_total_a_pagar`/
+  `saldo_pendiente` arrive as **decimal strings** here (`mysql2`-read `DECIMAL` columns) — unlike
+  `POST /prestamos/solicitar`'s response, where `montoSolicitado` is a JSON number (an echo of the
+  request body). This asymmetry between the two endpoints is real, confirmed against the server,
+  and deliberately not normalized away in either model.
+- `data/aval_detalle.dart`: `AvalDetalle` (`id`, `nombre`, `telefono`, nullable
+  `direccion`/`ingresoMensual`, the latter a `Decimal`) — only ever nested inside a loan detail.
+  `null` fields mean the value was genuinely never captured (never coerced to `''`/`0`).
+- `data/loan_detail.dart`: `PrestamoDetalle` — composed over a `PrestamoListItem` (`resumen`) plus
+  an optional `aval: AvalDetalle?`, with getters (`id`, `credito`, `montoSolicitado`, ...)
+  delegating to `resumen` so callers don't need to know about the composition. `aval == null` means
+  the loan genuinely has no guarantor on record (the server's `LEFT JOIN` found no row) — never an
+  empty/zero-filled `AvalDetalle` standing in for "none". The full body of
+  `GET /client/prestamos/:id`.
+- `data/loans_repository.dart` (same file as `submit()`, see the Loan request section above) also
+  has `fetchLoans({page, limit})` (`GET /client/prestamos`, marks `requiresAuthExtraKey` like every
+  other authenticated call) and `fetchLoanById(id)` (`GET /client/prestamos/:id`). Both are
+  **client-only** server-side (`verificarTokenCliente`, confirmed against
+  `routes/clientePrestamoRoutes.js`) — same audience rule as `submit()`. A `404 LOAN_NOT_FOUND` from
+  `fetchLoanById` already maps to `AppExceptionType.noEncontrado` via the shared
+  `error_mapper.dart` — this app never tries to distinguish "doesn't exist" from "belongs to
+  another client" itself, since the server deliberately returns the exact same 404 for both
+  (anti-enumeration, same principle as login).
+- `presentation/loans_list_state.dart` + `loans_list_controller.dart`: `LoansListState` has the
+  same five explicit statuses as `CreditsState`
+  (`initialLoading/data/initialError/refreshing/refreshError` — "empty" is `data` with an empty
+  list, not its own status; see `LoansListState.isEmpty`). `loansListControllerProvider` is
+  client-id-keyed exactly like `creditsControllerProvider`/`loanDraftControllerProvider`
+  (`ref.watch(authControllerProvider.select((s) => s.cliente?.id))`), so **logout or a different
+  client logging in recreates it fresh** (empty, not yet loaded) — this is what stops one client's
+  loans from ever leaking into another session's view, with no separate "clear on logout" call
+  needed anywhere. `LoansListController.loadInitial()` fires once per instance (idempotent, mirrors
+  `CreditsController`); `refresh()` re-fetches whatever page is currently shown (the only way this
+  app updates the list — no auto-polling, ever); `nextPage()`/`previousPage()` fetch the adjacent
+  page (server-paginated, fixed `fecha_solicitud DESC, id DESC` order, so `loans.first` on page 1
+  is always the most recent). **`refreshAfterSubmission()` is what satisfies "a successful
+  submission refreshes the list"**: the provider's `create` callback does `ref.listen` on
+  `loanSubmissionControllerProvider` and calls it only on a transition into
+  `LoanSubmissionStatus.success` — always jumping back to page 1 regardless of which page was being
+  viewed, so the just-created loan (sorted first by the server) is immediately visible. Like the
+  old `SessionLoanSummaryController` this replaced, this depends on being **actively watched**
+  (`ref.watch`, or `ProviderContainer.listen` in a test — not a one-off `read`) for its
+  client-id-keyed recreation and its `ref.listen` registration to happen promptly; `HomeScreen`
+  watching it early (same as before) is what guarantees that in practice.
+- `presentation/loan_detail_state.dart` + `loan_detail_controller.dart`: `LoanDetailState` is
+  `loading/data/error` — three explicit statuses, no booleans. `loanDetailControllerProvider` is a
+  `StateNotifierProvider.autoDispose.family<..., int>` keyed **only** on the numeric loan id from
+  the route (no client-id keying here — a loan's detail is fetched fresh every time its screen
+  opens and disposed as soon as nothing watches it, so it never survives long enough to leak
+  between sessions). `LoanDetailController` fetches once on construction; the presentation layer
+  only ever calls `retry()`.
 - `screens/home_screen.dart`: greets with the real `ClienteSummary.nombre` (never the client's
-  `id` as a headline value), a CTA into Simulación, and either the session summary (labeled
-  "Información recibida al enviar la solicitud" with a "doesn't auto-update" disclaimer) or the
-  honest empty message "Aún no has enviado una solicitud durante esta sesión." — **never** "No
-  tienes préstamos", which the backend has no way to actually confirm. No balance, no next payment,
-  no application-progress bar: none of that can be backed by any real endpoint.
-- `screens/status_screen.dart`: same `sessionLoanSummaryControllerProvider`, different framing —
-  `null` renders `EmptyState` explaining there is no query-own-requests endpoint yet (with a CTA
-  back to Simulación); a non-null summary renders the full server-authoritative fields (folio,
-  amounts, capture date, `estadoPrestamoLabel`) plus an explicit "this is not a live query" note.
-  Never fabricates a review timeline, an analyst name, or a decision date — those don't exist on
-  `LoanSubmissionResponse` and must not be invented here either.
+  `id` as a headline value), a CTA into Simulación, and the **most recent loan as reported by the
+  server right now** — `loansListControllerProvider`'s `mostRecent` getter (`loans.first` on page
+  1) — with a "Ver detalle" button into `/app/estado/:id`. The honest empty message is "Aún no has
+  enviado una solicitud." — **never** "No tienes préstamos", which would overstate what the server
+  actually confirms if the initial load itself fails. No balance, no next payment, no
+  application-progress bar: none of that can be backed by any real endpoint.
+- `screens/status_screen.dart`: lists the client's real loans via `LoansListView`
+  (`features/loans/presentation/widgets/loans_list_view.dart`, same five-state-switch pattern as
+  `CreditsCatalogView`) — a refresh button (`IconButton`, tooltip "Actualizar") and "Anterior"/
+  "Siguiente" page controls (a `Wrap`, not a `Row`, so they drop to a second line instead of
+  overflowing at a large text scale). Tapping a row navigates to `/app/estado/:id`. The empty state
+  ("Aún no tienes solicitudes registradas.") includes a CTA back to Simulación. Never fabricates a
+  review timeline, an analyst name, or a decision date — those don't exist on
+  `PrestamoListItem`/`PrestamoDetalle` and must not be invented here either.
+- `features/loans/presentation/loan_detail_screen.dart` (`/app/estado/:id`, nested under the
+  `estado` `StatefulShellBranch` in `router.dart`): every server-authoritative field
+  (`PrestamoDetalle`) plus the aval section — "Esta solicitud no tiene un aval registrado." when
+  `aval == null`, otherwise nombre/teléfono/dirección/ingreso mensual. `loanId` is `null` only when
+  the route's `:id` segment wasn't a valid positive integer (a malformed deep link); that case
+  shows a static "Identificador de solicitud inválido." message and never calls the repository.
 - `screens/calendar_screen.dart`: unconditionally `EmptyState` — the backend has payments/
-  amortization implemented **nowhere at all** (not even partially), so there's genuinely nothing
-  this screen could show, not even an honest "no pending payments" (that would still require an
-  endpoint that doesn't exist). This screen makes zero network calls; don't add one "just to check."
+  amortization implemented **nowhere at all** (not even partially, and unlike the loan list/detail,
+  there is no endpoint here to integrate), so there's genuinely nothing this screen could show, not
+  even an honest "no pending payments" (that would still require an endpoint that doesn't exist).
+  This screen makes zero network calls; don't add one "just to check."
 - `screens/profile_screen.dart`: only `ClienteSummary.{nombre, email}` — never `telefono` (login
   doesn't return it, see `core/storage/session_local_storage.dart`), never a fabricated
   role/score/verification-status field, never a toggle that implies a security feature (2FA/
@@ -440,11 +512,20 @@ See `test/screens/simulation_screen_test.dart` for both patterns side by side.
   before (exact text "Cerrar sesión" on both the tile and the dialog's confirm button — several
   existing tests in `test/app/app_flow_test.dart`/`loan_flow_test.dart` depend on that exact
   string, so don't rename it without checking those first).
+- Session behavior shared by every model/provider above: monetary fields are always `Decimal`,
+  never `double` (same rule as `features/credits`/the rest of `features/loans`) — `double` never
+  appears in this feature except at `currency_formatter.dart`'s exact JSON/display boundary. `401`
+  (specifically `TOKEN_EXPIRED`/`TOKEN_INVALID`) on any of these requests ends the session through
+  the same shared path as everywhere else in the app (`core/network/auth_interceptor.dart` →
+  `AuthController.sessionRejectedByServer`, wired once in `app/providers.dart`) — nothing in this
+  feature has its own 401 handling. A `403`, a timeout, or a `500` never end the session; they
+  surface as an `initialError`/`refreshError`/`LoanDetailStatus.error` with the server's own
+  message via `error_mapper.dart`, same as the credit catalog.
 - `lib/widgets/empty_state.dart`: the one shared "nothing real to show" shell (icon + title +
-  message + optional single action), used by `CalendarScreen` and `StatusScreen`'s empty case. Not
-  a general-purpose design system — only extract a new shared widget here when a second/third real
-  screen would otherwise duplicate the same layout, same reasoning as `estadoPrestamoLabel()`/
-  `formatLoanDate()` in `loan_status_label.dart`.
+  message + optional single action), used by `CalendarScreen` and `StatusScreen`'s
+  no-loans/initial-error cases. Not a general-purpose design system — only extract a new shared
+  widget here when a second/third real screen would otherwise duplicate the same layout, same
+  reasoning as `estadoPrestamoLabel()`/`formatLoanDate()` in `loan_status_label.dart`.
 - Cross-branch navigation from these screens (e.g. Home's "Ir a Simulación", Calendar's "Ir a
   Inicio") uses plain `context.go('/app/...')`, the same pattern already established in
   `loan_review_screen.dart`/`loan_confirmation_screen.dart` — this switches the

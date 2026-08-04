@@ -7,6 +7,7 @@ import '../features/auth/presentation/auth_state.dart';
 import '../features/auth/presentation/login_screen.dart';
 import '../features/auth/presentation/register_screen.dart';
 import '../features/loans/presentation/loan_confirmation_screen.dart';
+import '../features/loans/presentation/loan_detail_screen.dart';
 import '../features/loans/presentation/loan_draft.dart';
 import '../features/loans/presentation/loan_review_screen.dart';
 import '../features/loans/presentation/loan_submission_controller.dart';
@@ -145,7 +146,17 @@ final routerProvider = Provider<GoRouter>((ref) {
           StatefulShellBranch(
             routes: [
               GoRoute(
-                  path: '/app/estado', builder: (_, __) => const StatusScreen())
+                path: '/app/estado',
+                builder: (_, __) => const StatusScreen(),
+                routes: [
+                  GoRoute(
+                    path: ':id',
+                    builder: (_, state) => LoanDetailScreen(
+                      loanId: int.tryParse(state.pathParameters['id'] ?? ''),
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
           StatefulShellBranch(

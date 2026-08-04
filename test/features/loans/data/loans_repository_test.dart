@@ -491,4 +491,193 @@ void main() {
 
     expect(callCount, 1);
   });
+
+  final listJson = {
+    'data': [
+      {
+        'id': 1,
+        'credito': {'id': 1, 'nombre': 'Crédito Personal Express'},
+        'monto_solicitado': '10000.00',
+        'monto_total_a_pagar': '13000.00',
+        'saldo_pendiente': '13000.00',
+        'estado': 'PENDIENTE',
+        'fecha_solicitud': '2026-08-02T20:46:06.000Z',
+        'fecha_decision': null,
+      },
+    ],
+    'pagination': {'page': 1, 'limit': 20, 'total': 1, 'totalPages': 1},
+  };
+
+  group('LoansRepository.fetchLoans', () {
+    test('uses GET on the exact route with page/limit query params', () async {
+      late RequestOptions captured;
+      final repository = _repository((options) {
+        captured = options;
+        return jsonResponseBody(listJson, 200);
+      });
+
+      await repository.fetchLoans(page: 2, limit: 10);
+
+      expect(captured.method, 'GET');
+      expect(captured.path, '/client/prestamos');
+      expect(captured.queryParameters, {'page': 2, 'limit': 10});
+    });
+
+    test('marks the request as requiring auth', () async {
+      late RequestOptions captured;
+      final repository = _repository((options) {
+        captured = options;
+        return jsonResponseBody(listJson, 200);
+      });
+
+      await repository.fetchLoans(page: 1, limit: 20);
+
+      expect(captured.extra['requiresAuth'], isTrue);
+    });
+
+    test('parses data and pagination from a real response', () async {
+      final repository =
+          _repository((options) => jsonResponseBody(listJson, 200));
+
+      final page = await repository.fetchLoans(page: 1, limit: 20);
+
+      expect(page.data, hasLength(1));
+      expect(page.data.first.id, 1);
+      expect(page.data.first.credito.nombre, 'Crédito Personal Express');
+      expect(page.data.first.montoSolicitado, Decimal.parse('10000.00'));
+      expect(page.pagination.total, 1);
+      expect(page.pagination.totalPages, 1);
+    });
+
+    test('an empty page (page beyond the last) parses to an empty list',
+        () async {
+      final repository = _repository((options) => jsonResponseBody({
+            'data': <dynamic>[],
+            'pagination': {'page': 5, 'limit': 20, 'total': 1, 'totalPages': 1},
+          }, 200));
+
+      final page = await repository.fetchLoans(page: 5, limit: 20);
+
+      expect(page.data, isEmpty);
+    });
+
+    test('a wrong-shaped body throws the generic invalid-response exception',
+        () async {
+      final repository =
+          _repository((options) => jsonResponseBody({'oops': true}, 200));
+
+      await expectLater(
+        repository.fetchLoans(page: 1, limit: 20),
+        throwsA(isA<AppException>()
+            .having((e) => e.type, 'type', AppExceptionType.respuestaInvalida)),
+      );
+    });
+
+    test('a definite server error (500) maps through the shared error mapper',
+        () async {
+      final repository = _repository((options) => jsonResponseBody(
+          {'mensaje': 'Error del servidor.', 'codigo': null}, 500));
+
+      await expectLater(
+        repository.fetchLoans(page: 1, limit: 20),
+        throwsA(isA<AppException>()
+            .having((e) => e.type, 'type', AppExceptionType.errorServidor)),
+      );
+    });
+
+    test('a 401 maps to noAutenticado, same as everywhere else in this app',
+        () async {
+      final repository = _repository((options) => jsonResponseBody(
+          {'mensaje': 'Token expirado', 'codigo': 'TOKEN_EXPIRED'}, 401));
+
+      await expectLater(
+        repository.fetchLoans(page: 1, limit: 20),
+        throwsA(isA<AppException>()
+            .having((e) => e.type, 'type', AppExceptionType.noAutenticado)),
+      );
+    });
+  });
+
+  group('LoansRepository.fetchLoanById', () {
+    final detailJson = {
+      'id': 1,
+      'credito': {'id': 1, 'nombre': 'Crédito Personal Express'},
+      'monto_solicitado': '10000.00',
+      'monto_total_a_pagar': '13000.00',
+      'saldo_pendiente': '13000.00',
+      'estado': 'PENDIENTE',
+      'fecha_solicitud': '2026-08-02T20:46:06.000Z',
+      'fecha_decision': null,
+      'aval': null,
+    };
+
+    test('uses GET on the exact route with the id interpolated', () async {
+      late RequestOptions captured;
+      final repository = _repository((options) {
+        captured = options;
+        return jsonResponseBody(detailJson, 200);
+      });
+
+      await repository.fetchLoanById(42);
+
+      expect(captured.method, 'GET');
+      expect(captured.path, '/client/prestamos/42');
+    });
+
+    test('marks the request as requiring auth', () async {
+      late RequestOptions captured;
+      final repository = _repository((options) {
+        captured = options;
+        return jsonResponseBody(detailJson, 200);
+      });
+
+      await repository.fetchLoanById(1);
+
+      expect(captured.extra['requiresAuth'], isTrue);
+    });
+
+    test('parses a detail with a null aval', () async {
+      final repository =
+          _repository((options) => jsonResponseBody(detailJson, 200));
+
+      final detail = await repository.fetchLoanById(1);
+
+      expect(detail.id, 1);
+      expect(detail.aval, isNull);
+    });
+
+    test('parses a detail with a real aval', () async {
+      final repository = _repository((options) => jsonResponseBody({
+            ...detailJson,
+            'aval': {
+              'id': 5,
+              'nombre': 'Roberto Gómez',
+              'telefono': '8711234567',
+              'direccion': 'Av. Morelos #450, Centro',
+              'ingreso_mensual': '15000.00',
+            },
+          }, 200));
+
+      final detail = await repository.fetchLoanById(1);
+
+      expect(detail.aval, isNotNull);
+      expect(detail.aval!.nombre, 'Roberto Gómez');
+      expect(detail.aval!.ingresoMensual, Decimal.parse('15000.00'));
+    });
+
+    test(
+        '404 LOAN_NOT_FOUND (nonexistent or another client\'s loan) maps to '
+        'noEncontrado — this app never distinguishes the two cases', () async {
+      final repository = _repository((options) => jsonResponseBody(
+          {'mensaje': 'Prestamo no encontrado.', 'codigo': 'LOAN_NOT_FOUND'},
+          404));
+
+      await expectLater(
+        repository.fetchLoanById(999),
+        throwsA(isA<AppException>()
+            .having((e) => e.type, 'type', AppExceptionType.noEncontrado)
+            .having((e) => e.codigo, 'codigo', 'LOAN_NOT_FOUND')),
+      );
+    });
+  });
 }

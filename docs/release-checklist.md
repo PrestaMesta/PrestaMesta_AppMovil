@@ -18,11 +18,11 @@ tratarse como definitivo.
 | Solicitud de préstamo (`POST /prestamos/solicitar`) | Real, aval opcional |
 | Resultado ambiguo de envío (`outcomeUnknown`) | Implementado, mitigación local, no idempotencia real |
 | Inicio / Estado / Calendario / Perfil | Reales, sin datos ficticios |
+| Consulta de solicitudes propias (listado paginado + detalle con aval) | Real (`GET /client/prestamos`, `GET /client/prestamos/:id`) |
 | MFA / step-up | **No implementado** (ni en el backend) |
 | Verificación de identidad / OCR | **No implementado** (ni en el backend) |
 | Destino de desembolso | **No implementado** (ni en el backend) |
 | Pagos / calendario de amortización | **No implementado** (ni en el backend) |
-| Consulta de solicitudes propias (historial) | **No implementado** (ni en el backend) |
 | Logout con revocación server-side | **No implementado** (JWT stateless en el backend) |
 | Analytics / crash reporting | No incluido (decisión deliberada hasta ahora) |
 
@@ -109,7 +109,10 @@ Auditado en este checkpoint (ver el reporte de Checkpoint 6 para el detalle comp
 
 - Único permiso de Android: `INTERNET`. Sin cámara, ubicación, contactos ni almacenamiento externo.
 - JWT y `ClienteSummary` solo en `flutter_secure_storage`, nunca en `SharedPreferences`/archivos.
-- `LoanDraft` y `SessionLoanSummary` solo en memoria — nunca persistidos, nunca en logs.
+- `LoanDraft` solo en memoria — nunca persistido, nunca en logs. El listado/detalle de préstamos
+  (`loansListControllerProvider`/`loanDetailControllerProvider`) se trae del servidor bajo demanda
+  en cada sesión (sin caché en disco); tampoco aparece en logs (`SanitizingLoggingInterceptor`
+  redacta los campos monetarios/personales de cualquier request/response, ver abajo).
 - `SanitizingLoggingInterceptor` redacta `Authorization`/`Cookie`/`password`/`token`/`jwt`/`email`/
   `nombre`/`telefono`/`direccion`/`ingreso`/`monto`, y solo está activo bajo `kDebugMode`.
 - Sin analytics, sin crash reporting de terceros, sin SDKs de rastreo.
@@ -178,9 +181,10 @@ aprobado) de cada uno:
 - **Verificación de identidad**: no implementado en ningún lado.
 - **Destino de desembolso**: no implementado en ningún lado; el backend no tiene ningún concepto
   de a dónde se deposita un préstamo aprobado.
-- **Consulta de solicitudes propias**: no implementado; esta app solo puede mostrar la respuesta
-  de una solicitud enviada durante la sesión actual (`SessionLoanSummary`, en memoria).
-- **Pagos**: no implementado en absoluto.
+- **Pagos**: no implementado en absoluto — es la única razón por la que Calendario sigue siendo un
+  estado vacío. (La consulta de solicitudes propias, que antes estaba en esta lista, ya está
+  implementada: `GET /client/prestamos` + `GET /client/prestamos/:id`, ver `docs/mobile-api-gaps.md`
+  y la sección "Home, Status, Calendar, Profile" de `CLAUDE.md`.)
 
 **No presentes esta aplicación como lista para producción mientras falte cualquiera de las
 secciones 3, 4, 5, 7, 8, 9, 10 y 11 de este documento.**

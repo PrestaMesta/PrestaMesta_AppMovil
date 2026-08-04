@@ -84,10 +84,26 @@ final _successJson = {
   'estado': 'PENDIENTE',
 };
 
+final _emptyLoansPage = {
+  'data': <dynamic>[],
+  'pagination': {'page': 1, 'limit': 20, 'total': 0, 'totalPages': 0},
+};
+
+/// [responder] only answers `POST /prestamos/solicitar` — this file's tests
+/// care about that call specifically (double-submit guards, request bodies,
+/// error handling). Every `GET /client/prestamos*` (issued automatically by
+/// `HomeScreen`/`StatusScreen` now that both are backed by the real list/
+/// detail endpoints) gets a benign empty page instead, so those don't affect
+/// this file's POST-focused call counts/captured bodies.
 LoansRepository _loansRepository(
     FutureOr<ResponseBody> Function(RequestOptions) responder) {
   final dio = Dio(BaseOptions(baseUrl: 'https://api.test'))
-    ..httpClientAdapter = FakeHttpClientAdapter(responder);
+    ..httpClientAdapter = FakeHttpClientAdapter((options) {
+      if (options.method == 'GET') {
+        return jsonResponseBody(_emptyLoansPage, 200);
+      }
+      return responder(options);
+    });
   return LoansRepository(dio);
 }
 
@@ -350,10 +366,13 @@ void main() {
     // wiring: a 401 TOKEN_EXPIRED on the loan submission clears the session
     // through the exact same mechanism as anywhere else in the app (see
     // `auth_session_rejection_integration_test.dart` for the same pattern).
-    final adapter = FakeHttpClientAdapter(
-      (options) => jsonResponseBody(
-          {'mensaje': 'Token expirado', 'codigo': 'TOKEN_EXPIRED'}, 401),
-    );
+    final adapter = FakeHttpClientAdapter((options) {
+      if (options.method == 'GET') {
+        return jsonResponseBody(_emptyLoansPage, 200);
+      }
+      return jsonResponseBody(
+          {'mensaje': 'Token expirado', 'codigo': 'TOKEN_EXPIRED'}, 401);
+    });
     final config = EnvConfig.parse(
         appEnvRaw: 'local', apiBaseUrlRaw: 'http://10.0.2.2:3000');
 
@@ -402,10 +421,13 @@ void main() {
     // rejected purely on audience mismatch with 401 TOKEN_INVALID — the app
     // must treat that exactly like any other session rejection, not as a
     // "wrong password" style failure.
-    final adapter = FakeHttpClientAdapter(
-      (options) => jsonResponseBody(
-          {'mensaje': 'Token invalido.', 'codigo': 'TOKEN_INVALID'}, 401),
-    );
+    final adapter = FakeHttpClientAdapter((options) {
+      if (options.method == 'GET') {
+        return jsonResponseBody(_emptyLoansPage, 200);
+      }
+      return jsonResponseBody(
+          {'mensaje': 'Token invalido.', 'codigo': 'TOKEN_INVALID'}, 401);
+    });
     final config = EnvConfig.parse(
         appEnvRaw: 'local', apiBaseUrlRaw: 'http://10.0.2.2:3000');
 
