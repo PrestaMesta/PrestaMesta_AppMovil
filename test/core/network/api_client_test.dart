@@ -17,7 +17,7 @@ void main() {
       onSessionRejected: () {},
     );
 
-    expect(client.dio.options.baseUrl, 'http://10.0.2.2:3000');
+    expect(client.dio.options.baseUrl, 'http://10.0.2.2:3000/api/v1');
     expect(client.dio.options.headers['Accept'], 'application/json');
 
     expect(client.dio.interceptors.whereType<AuthInterceptor>(), hasLength(1));
@@ -32,5 +32,37 @@ void main() {
       (i) => i.runtimeType.toString().toLowerCase().contains('retry'),
     );
     expect(hasRetryInterceptor, isFalse);
+  });
+
+  test('appends /api/v1 exactly once even if API_BASE_URL has a trailing slash',
+      () {
+    final config = EnvConfig.parse(
+        appEnvRaw: 'testing',
+        apiBaseUrlRaw: 'https://apitest.prestamesta.fun/');
+
+    final client = ApiClient.create(
+      config: config,
+      readToken: () async => null,
+      onSessionRejected: () {},
+    );
+
+    expect(
+        client.dio.options.baseUrl, 'https://apitest.prestamesta.fun/api/v1');
+  });
+
+  test(
+      'a real deployed domain gets the exact route confirmed against the '
+      'server (PrestaMesta_Server/app.js mounts everything under /api/v1)', () {
+    final config = EnvConfig.parse(
+        appEnvRaw: 'testing', apiBaseUrlRaw: 'https://apitest.prestamesta.fun');
+
+    final client = ApiClient.create(
+      config: config,
+      readToken: () async => null,
+      onSessionRejected: () {},
+    );
+
+    expect(
+        client.dio.options.baseUrl, 'https://apitest.prestamesta.fun/api/v1');
   });
 }
