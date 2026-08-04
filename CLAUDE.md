@@ -46,8 +46,16 @@ flutter test test/core/config/env_config_test.dart   # run a single test file
 The app **requires** `--dart-define=APP_ENV=<local|testing|production>` and
 `--dart-define=API_BASE_URL=<url>` to start at all (`lib/core/config/env_config.dart` validates
 this in `main()` before `runApp`) — a bare `flutter run` shows a config-error screen instead of
-launching. See the README's "Configuración de entornos" section for exact commands, including the
-`10.0.2.2` address needed to reach a local backend from the Android emulator.
+launching. `env/local.json`/`env/testing.json` hold these per-environment (run with
+`flutter run --dart-define-from-file=env/testing.json`) so nobody has to retype both flags by
+hand — `env/production.json` deliberately doesn't exist yet (no real production domain, see
+`docs/release-checklist.md`); never fabricate one "just so the file exists". See the README's
+"Configuración de entornos" section for exact commands, including the `10.0.2.2` address needed to
+reach a local backend from the Android emulator. `API_BASE_URL` is always just the server's origin
+— `core/network/api_client.dart` appends `/api/v1` exactly once when building the `Dio` client
+(every real `PrestaMesta_Server` route is mounted under that prefix); never bake `/api/v1` into an
+`env/*.json` file or a `--dart-define` value, and never repeat it inside a repository's own call
+path.
 
 There is no CI config yet. Only the `android/` platform folder is present (no `ios/`, `web/`,
 `linux/`, etc. scaffolding) — generate other platforms with `flutter create .` if ever needed.
@@ -125,6 +133,15 @@ scale.
 - `core/network/api_client.dart`: the single `Dio` instance/factory. Deliberately has **no retry
   interceptor** — a financial or auth `POST` must never be replayed automatically by the HTTP
   layer; any future retry logic must be explicit and caller-scoped to safe (GET) requests only.
+  Appends `/api/v1` to `EnvConfig.apiBaseUrl` exactly once here (stripping a trailing slash first)
+  — every real route on `PrestaMesta_Server` is mounted under that prefix (confirmed in
+  `PrestaMesta_Server/app.js`'s `app.use('/api/v1/...', ...)` calls and `openapi.yaml`'s `servers:
+  url: /api/v1`), so `EnvConfig.apiBaseUrl`/`API_BASE_URL` must stay just the origin
+  (`https://apitest.prestamesta.fun`, no path) — don't add `/api/v1` to a dart-define value or to
+  an individual repository's call path, and don't move this prefix anywhere else. (This was a real
+  bug until it was caught against a live deployed testing backend — before that, nothing in the
+  test suite could have caught it, since every test uses a fake `HttpClientAdapter` that never
+  validates a path against a real server.)
 - `core/network/auth_interceptor.dart`: only attaches `Authorization: Bearer <token>` when a
   request sets `options.extra[requiresAuthExtraKey] = true` — public calls (login, register) must
   never set this. Also exposes `isSessionRejection(DioException)`, true only for a `401` whose

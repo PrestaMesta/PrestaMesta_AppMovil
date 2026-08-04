@@ -12,6 +12,15 @@ const _receiveTimeout = Duration(seconds: 20);
 /// base URL, timeouts, headers, auth handling and sanitized logging without
 /// each repository re-deriving it.
 ///
+/// `EnvConfig.apiBaseUrl` is deliberately just the server's origin (e.g.
+/// `https://apitest.prestamesta.fun`, no path) — every real route on
+/// `PrestaMesta_Server` is mounted under `/api/v1` (confirmed in
+/// `PrestaMesta_Server/app.js` and `openapi.yaml`'s `servers: url: /api/v1`),
+/// so that prefix is appended exactly once, here, rather than repeated in
+/// every repository's call (`'/client/auth/login'`, `'/prestamos/creditos'`,
+/// ...). A trailing slash on the configured origin is stripped first so this
+/// never produces a double slash.
+///
 /// Deliberately does **not** register any retry interceptor: a POST that
 /// creates a loan or an auth attempt must never be retried automatically by
 /// the HTTP layer — a timed-out request whose write actually succeeded on the
@@ -27,9 +36,12 @@ class ApiClient {
     required Future<String?> Function() readToken,
     required void Function() onSessionRejected,
   }) {
+    final origin = config.apiBaseUrl.endsWith('/')
+        ? config.apiBaseUrl.substring(0, config.apiBaseUrl.length - 1)
+        : config.apiBaseUrl;
     final dio = Dio(
       BaseOptions(
-        baseUrl: config.apiBaseUrl,
+        baseUrl: '$origin/api/v1',
         connectTimeout: _connectTimeout,
         receiveTimeout: _receiveTimeout,
         contentType: Headers.jsonContentType,

@@ -63,6 +63,10 @@ lib/
     calendar_screen.dart    # Estado vacío honesto (el backend no tiene pagos implementados)
     status_screen.dart      # Última solicitud de la sesión, o estado vacío honesto
     profile_screen.dart     # Nombre/correo reales + acción de cerrar sesión
+env/
+  local.json               # APP_ENV=local + API_BASE_URL, para --dart-define-from-file
+  testing.json             # APP_ENV=testing + API_BASE_URL del backend de pruebas real
+                            # (production.json no existe aún: no hay dominio de producción)
 ```
 
 No hay ningún archivo de datos ficticios en `lib/` — `lib/data/demo_data.dart` y
@@ -267,6 +271,39 @@ contra `10.0.2.2`); tanto `testing` como `production` exigen `https://`. No hay 
 hardcodeados ni por defecto: un `flutter run` sin estas banderas muestra una pantalla de error en
 vez de arrancar con una URL adivinada.
 
+**`API_BASE_URL` es solo el origen del servidor (esquema + host + puerto), sin `/api/v1` ni
+ninguna otra ruta** — `lib/core/network/api_client.dart` agrega `/api/v1` exactamente una vez al
+construir el cliente HTTP, porque **todas** las rutas reales de `PrestaMesta_Server` están
+montadas bajo ese prefijo (confirmado en `PrestaMesta_Server/app.js` y en `openapi.yaml`). Pasar
+`API_BASE_URL=https://apitest.prestamesta.fun` es correcto; pasar
+`https://apitest.prestamesta.fun/api/v1` produciría `/api/v1/api/v1/...` y fallaría.
+
+### Forma recomendada: archivos `env/*.json`
+
+En vez de escribir ambas banderas `--dart-define` a mano cada vez, los valores de cada entorno
+viven en `env/local.json` y `env/testing.json` (`APP_ENV`/`API_BASE_URL` como claves) — edítalos
+ahí si cambia una URL, y corre con `--dart-define-from-file`:
+
+```bash
+flutter run --dart-define-from-file=env/local.json
+flutter run --dart-define-from-file=env/testing.json
+```
+
+`env/production.json` **no existe todavía** — el dominio real de producción no está definido (ver
+`docs/release-checklist.md`, sección de dominios pendientes). Créalo con la misma forma
+(`{"APP_ENV": "production", "API_BASE_URL": "https://..."}`) en cuanto exista un dominio real; no
+inventes un valor de producción "provisional", porque `EnvConfig` lo tomaría como válido y un
+build podría terminar apuntando a un backend equivocado sin ningún aviso.
+
+Estos archivos **no son secretos** (solo declaran qué entorno es y a qué dominio público apunta,
+nunca credenciales) — por eso están versionados. Si en algún momento un entorno necesitara un
+valor sensible, ese archivo específico debe ir a `.gitignore`, no el mecanismo en general.
+
+### Forma equivalente: `--dart-define` directo
+
+Sigue funcionando exactamente igual (`--dart-define-from-file` es solo azúcar sintáctico sobre lo
+mismo); útil para overrides puntuales sin editar un archivo:
+
 ```bash
 # Local, contra el backend corriendo en tu máquina, desde el emulador Android
 # (10.0.2.2 es la IP que el emulador usa para llegar al host)
@@ -274,12 +311,13 @@ flutter run -d emulator-5554 \
   --dart-define=APP_ENV=local \
   --dart-define=API_BASE_URL=http://10.0.2.2:3000
 
-# Testing, contra un backend de pruebas (reemplaza el placeholder por la URL real)
+# Testing, contra el backend de pruebas ya desplegado
 flutter run -d emulator-5554 \
   --dart-define=APP_ENV=testing \
-  --dart-define=API_BASE_URL=https://API-DE-PRUEBAS
+  --dart-define=API_BASE_URL=https://apitest.prestamesta.fun
 
-# Producción (build de release, reemplaza el placeholder por la URL real)
+# Producción (build de release, reemplaza el placeholder por el dominio real
+# de producción una vez exista — todavía no está desplegado)
 flutter build apk --release \
   --dart-define=APP_ENV=production \
   --dart-define=API_BASE_URL=https://API-DE-PRODUCCION

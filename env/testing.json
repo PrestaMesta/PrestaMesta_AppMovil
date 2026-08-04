@@ -1,0 +1,4 @@
+{
+  "APP_ENV": "testing",
+  "API_BASE_URL": "https://apitest.prestamesta.fun"
+}
