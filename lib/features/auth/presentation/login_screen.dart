@@ -5,11 +5,18 @@ import 'package:go_router/go_router.dart';
 
 import '../../../theme/app_theme.dart';
 import '../../../widgets/pm_logo.dart';
-import 'auth_controller.dart';
-import 'auth_state.dart';
+import 'mfa_controller.dart';
+import 'mfa_state.dart';
 import 'widgets/auth_error_banner.dart';
 import 'widgets/password_field.dart';
 
+/// Only checks the password now (`MfaController.loginWithPassword`) — since
+/// Checkpoint 6D, a correct password never authenticates by itself, it only
+/// starts the mandatory MFA flow (see `mfa_controller.dart`). This screen is
+/// reachable only while `mfaControllerProvider`'s phase is `idle`
+/// (`router.dart#mfaRedirect` bounces every other phase to the matching MFA
+/// screen), so any error/notice shown here always belongs to *this* screen,
+/// never a stale one from a previous attempt.
 class LoginScreen extends ConsumerStatefulWidget {
   final String? prefillEmail;
 
@@ -43,15 +50,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   void _submit() {
     if (!_formKey.currentState!.validate()) return;
-    ref.read(authControllerProvider.notifier).login(
+    ref.read(mfaControllerProvider.notifier).loginWithPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text);
   }
 
   @override
   Widget build(BuildContext context) {
-    final authState = ref.watch(authControllerProvider);
-    final isSubmitting = authState.status == AuthStatus.authenticating;
+    final mfaState = ref.watch(mfaControllerProvider);
+    final isSubmitting = mfaState.phase == MfaPhase.loggingIn;
+    final expiredNotice = mfaState.sessionExpiredNotice;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -80,9 +88,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             ?.copyWith(fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 24),
-                      if (authState.status == AuthStatus.error &&
-                          authState.error != null) ...[
-                        AuthErrorBanner(error: authState.error!),
+                      if (expiredNotice != null) ...[
+                        _ExpiredNoticeBanner(message: expiredNotice),
+                        const SizedBox(height: 16),
+                      ],
+                      if (mfaState.phase == MfaPhase.idle &&
+                          mfaState.error != null) ...[
+                        AuthErrorBanner(error: mfaState.error!),
                         const SizedBox(height: 16),
                       ],
                       TextFormField(
@@ -121,6 +133,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             ? null
                             : () {
                                 TextInput.finishAutofillContext();
+                                ref
+                                    .read(mfaControllerProvider.notifier)
+                                    .dismissExpiredNotice();
                                 _submit();
                               },
                         child: isSubmitting
@@ -144,6 +159,45 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ExpiredNoticeBanner extends StatelessWidget {
+  final String message;
+
+  const _ExpiredNoticeBanner({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+        decoration: BoxDecoration(
+          color: AppColors.warningBg,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.divider),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.info_outline_rounded,
+                size: 20, color: AppColors.textSecondary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13.5),
+              ),
+            ),
+          ],
         ),
       ),
     );

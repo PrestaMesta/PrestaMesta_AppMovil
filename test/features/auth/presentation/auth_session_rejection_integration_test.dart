@@ -6,7 +6,6 @@ import 'package:prestamesta_app/core/config/env_config.dart';
 import 'package:prestamesta_app/core/network/api_client.dart';
 import 'package:prestamesta_app/core/storage/secure_storage.dart';
 import 'package:prestamesta_app/core/storage/session_local_storage.dart';
-import 'package:prestamesta_app/features/auth/data/auth_repository.dart';
 import 'package:prestamesta_app/features/auth/presentation/auth_controller.dart';
 import 'package:prestamesta_app/features/auth/presentation/auth_state.dart';
 
@@ -51,8 +50,8 @@ void main() {
     await sessionStorage.saveSession(token: _fakeJwt(), cliente: _cliente);
 
     authController = AuthController(
-      authRepository: AuthRepository(Dio()), // unused directly in these tests
       sessionStorage: sessionStorage,
+      clearMfaFlow: () {},
     );
     await _pump();
     expect(authController.state.status, AuthStatus.authenticated,

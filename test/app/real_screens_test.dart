@@ -45,6 +45,13 @@ String _token(int sub) {
 }
 
 int _authCallCount = 0;
+
+/// Since Checkpoint 6D a correct password only starts the mandatory MFA
+/// flow — this fake answers `POST /client/auth/login` with
+/// `siguientePaso: MFA_CHALLENGE_REQUIRED` and `POST /client/auth/mfa/verify`
+/// with a real session for any code, so `_login` below can complete a full
+/// login (two HTTP calls total) without this file's tests needing to know
+/// MFA mechanics — those are covered by `test/features/auth/**`.
 AuthRepository _authRepository(
     {int clienteId = 1,
     String nombre = 'Juan Pérez',
@@ -52,10 +59,17 @@ AuthRepository _authRepository(
   final dio = Dio(BaseOptions(baseUrl: 'https://api.test'))
     ..httpClientAdapter = FakeHttpClientAdapter((options) {
       _authCallCount++;
+      if (options.path == '/client/auth/mfa/verify') {
+        return jsonResponseBody({
+          'mensaje': 'ok',
+          'token': _token(clienteId),
+          'cliente': {'id': clienteId, 'nombre': nombre, 'email': email},
+        }, 200);
+      }
       return jsonResponseBody({
-        'mensaje': 'ok',
-        'token': _token(clienteId),
-        'cliente': {'id': clienteId, 'nombre': nombre, 'email': email},
+        'mensaje': 'Verifica tu identidad para continuar.',
+        'preMfaToken': 'pre-mfa-token',
+        'siguientePaso': 'MFA_CHALLENGE_REQUIRED',
       }, 200);
     });
   return AuthRepository(dio);
@@ -241,6 +255,10 @@ Future<void> _login(WidgetTester tester,
   await tester.enterText(find.byType(TextFormField).first, email);
   await tester.enterText(find.byType(TextFormField).at(1), password);
   await tester.tap(find.text('Entrar'));
+  await tester.pumpAndSettle();
+  await tester.enterText(find.byType(TextFormField).first, '123456');
+  await tester.ensureVisible(find.text('Verificar'));
+  await tester.tap(find.text('Verificar'));
   await tester.pumpAndSettle();
 }
 
@@ -534,7 +552,7 @@ void main() {
       await tester.tap(find.text('Inicio'));
       await tester.pumpAndSettle();
 
-      expect(_authCallCount, 1);
+      expect(_authCallCount, 2); // login + mfa/verify — see _login above
       expect(_loanCallCount, callsAfterLogin);
     });
   });

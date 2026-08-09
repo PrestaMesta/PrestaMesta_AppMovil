@@ -1,41 +1,28 @@
-import '../../../core/errors/app_exception.dart';
 import '../../../core/storage/session_local_storage.dart';
 
-/// The five session states this app distinguishes — deliberately a single
-/// enum plus payload, not a handful of independent booleans (which could
-/// otherwise represent nonsensical combinations like "authenticated and
-/// restoring at the same time").
-enum AuthStatus {
-  restoring,
-  unauthenticated,
-  authenticating,
-  authenticated,
-  error
-}
+/// The three session states this app distinguishes. Checking the password
+/// and completing MFA no longer happen here — see `mfa_state.dart`/
+/// `mfa_controller.dart` — so this class only ever describes whether a real,
+/// finished session exists, never a password check or an MFA step in
+/// progress.
+enum AuthStatus { restoring, unauthenticated, authenticated }
 
 class AuthState {
   final AuthStatus status;
   final ClienteSummary? cliente;
-  final AppException? error;
 
-  const AuthState._({required this.status, this.cliente, this.error});
+  const AuthState._({required this.status, this.cliente});
 
   const AuthState.restoring() : this._(status: AuthStatus.restoring);
 
   const AuthState.unauthenticated()
       : this._(status: AuthStatus.unauthenticated);
 
-  const AuthState.authenticating() : this._(status: AuthStatus.authenticating);
-
   const AuthState.authenticated(ClienteSummary cliente)
       : this._(status: AuthStatus.authenticated, cliente: cliente);
-
-  const AuthState.error(AppException error)
-      : this._(status: AuthStatus.error, error: error);
 
   bool get isAuthenticated => status == AuthStatus.authenticated;
 
   @override
-  String toString() =>
-      'AuthState(status: $status, cliente: ${cliente?.id}, error: ${error?.type})';
+  String toString() => 'AuthState(status: $status, cliente: ${cliente?.id})';
 }

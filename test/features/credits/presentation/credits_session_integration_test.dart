@@ -88,8 +88,10 @@ void main() {
       overrides: [
         sessionLocalStorageProvider
             .overrideWithValue(SessionLocalStorage(FakeSecureStorage())),
-        // authControllerProvider always needs authRepositoryProvider to
-        // build itself, even in a test that never calls login().
+        // AuthController.logout() clears any pending MFA flow via
+        // mfaControllerProvider, which in turn needs authRepositoryProvider
+        // to build itself — required even though these tests bypass MFA
+        // entirely via completeMfaLogin().
         authRepositoryProvider.overrideWithValue(_loginSucceedsRepository()),
         creditsRepositoryProvider
             .overrideWithValue(_countingCreditsRepository(() => fetchCount++)),
@@ -128,9 +130,10 @@ void main() {
     expect(container.read(authControllerProvider).status,
         AuthStatus.unauthenticated);
 
-    await container
-        .read(authControllerProvider.notifier)
-        .login(email: 'juan@example.com', password: 'x');
+    await container.read(authControllerProvider.notifier).completeMfaLogin(
+        token: _validJwt(),
+        cliente: const ClienteSummary(
+            id: 1, nombre: 'Juan', email: 'juan@example.com'));
     expect(container.read(authControllerProvider).status,
         AuthStatus.authenticated);
 
@@ -159,9 +162,10 @@ void main() {
     expect(container.read(authControllerProvider).status,
         AuthStatus.unauthenticated);
 
-    await container
-        .read(authControllerProvider.notifier)
-        .login(email: 'juan@example.com', password: 'x');
+    await container.read(authControllerProvider.notifier).completeMfaLogin(
+        token: _validJwt(),
+        cliente: const ClienteSummary(
+            id: 1, nombre: 'Juan', email: 'juan@example.com'));
     container.read(creditsControllerProvider);
     await _pump();
     expect(container.read(creditsControllerProvider).creditos, hasLength(1));

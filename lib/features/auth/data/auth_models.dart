@@ -1,5 +1,3 @@
-import '../../../core/storage/session_local_storage.dart';
-
 /// Body for `POST /client/auth/register` — exactly `ClienteRegistroInput`
 /// (`PrestaMesta_Server/openapi.yaml`). `telefono` is genuinely optional on
 /// the server (`.optional()` in `validators/clienteAuthValidators.js`); never
@@ -43,7 +41,10 @@ class RegisterResult {
   }
 }
 
-/// Body for `POST /client/auth/login` — exactly `LoginInput`.
+/// Body for `POST /client/auth/login` — exactly `LoginInput`. Since
+/// Checkpoint 6B-2 the `200` response is no longer a usable session (see
+/// `LoginPreMfaResult` in `mfa_models.dart`) — a correct password only ever
+/// starts the mandatory MFA flow now.
 class LoginRequest {
   final String email;
   final String password;
@@ -51,30 +52,4 @@ class LoginRequest {
   const LoginRequest({required this.email, required this.password});
 
   Map<String, dynamic> toJson() => {'email': email, 'password': password};
-}
-
-/// The `200` body of `POST /client/auth/login`: `{mensaje, token, cliente}`.
-/// [cliente] reuses [ClienteSummary] — it's the exact same shape
-/// (`{id, nombre, email}`) that gets persisted locally after login.
-class LoginResult {
-  final String mensaje;
-  final String token;
-  final ClienteSummary cliente;
-
-  const LoginResult(
-      {required this.mensaje, required this.token, required this.cliente});
-
-  factory LoginResult.fromJson(Map<String, dynamic> json) {
-    final token = json['token'] as String?;
-    final clienteJson = json['cliente'] as Map<String, dynamic>?;
-    if (token == null || token.isEmpty || clienteJson == null) {
-      throw const FormatException(
-          'Respuesta de login incompleta: falta token o cliente.');
-    }
-    return LoginResult(
-      mensaje: json['mensaje'] as String? ?? '',
-      token: token,
-      cliente: ClienteSummary.fromJson(clienteJson),
-    );
-  }
 }

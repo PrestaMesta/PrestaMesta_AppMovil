@@ -5,22 +5,21 @@ import 'package:prestamesta_app/core/errors/app_exception.dart';
 import 'package:prestamesta_app/core/network/api_client.dart';
 import 'package:prestamesta_app/features/auth/data/auth_models.dart';
 import 'package:prestamesta_app/features/auth/data/auth_repository.dart';
+import 'package:prestamesta_app/features/auth/data/mfa_models.dart';
 
 import '../../../support/fake_http_client_adapter.dart';
 
 void main() {
   group('AuthRepository.login', () {
-    test('returns a LoginResult on a 200 with the real envelope shape',
+    test(
+        'returns a LoginPreMfaResult on a 200 with the real Checkpoint 6D envelope shape',
         () async {
       final adapter = FakeHttpClientAdapter(
         (options) => jsonResponseBody({
-          'mensaje': 'Autenticación exitosa',
-          'token': 'eyJhbGciOiJIUzI1NiJ9.abc.def',
-          'cliente': {
-            'id': 1,
-            'nombre': 'Juan Pérez',
-            'email': 'juan@example.com'
-          },
+          'mensaje': 'Verifica tu identidad para continuar.',
+          'preMfaToken': 'eyJhbGciOiJIUzI1NiJ9.pre-mfa.def',
+          'siguientePaso': 'MFA_CHALLENGE_REQUIRED',
+          'mfaEstado': 'ACTIVO',
         }, 200),
       );
       final dio = Dio(BaseOptions(baseUrl: 'https://api.test'))
@@ -32,8 +31,27 @@ void main() {
             email: 'juan@example.com', password: 'ClaveSegura123'),
       );
 
-      expect(result.token, 'eyJhbGciOiJIUzI1NiJ9.abc.def');
-      expect(result.cliente.email, 'juan@example.com');
+      expect(result.preMfaToken, 'eyJhbGciOiJIUzI1NiJ9.pre-mfa.def');
+      expect(result.siguientePaso, SiguientePasoMfa.challengeRequired);
+    });
+
+    test('parses siguientePaso: MFA_ENROLLMENT_REQUIRED', () async {
+      final adapter = FakeHttpClientAdapter(
+        (options) => jsonResponseBody({
+          'mensaje': 'Verifica tu identidad para continuar.',
+          'preMfaToken': 'pre-mfa-token',
+          'siguientePaso': 'MFA_ENROLLMENT_REQUIRED',
+        }, 200),
+      );
+      final dio = Dio(BaseOptions(baseUrl: 'https://api.test'))
+        ..httpClientAdapter = adapter;
+      final repository = AuthRepository(dio);
+
+      final result = await repository.login(
+        const LoginRequest(email: 'juan@example.com', password: 'x'),
+      );
+
+      expect(result.siguientePaso, SiguientePasoMfa.enrollmentRequired);
     });
 
     test('throws AppException(noAutenticado) on 401 INVALID_CREDENTIALS',
@@ -79,9 +97,9 @@ void main() {
         () async {
       final adapter = FakeHttpClientAdapter(
         (options) => jsonResponseBody({
-          'mensaje': 'ok',
-          'token': 'new-token',
-          'cliente': {'id': 1, 'nombre': 'Juan', 'email': 'juan@example.com'},
+          'mensaje': 'Verifica tu identidad para continuar.',
+          'preMfaToken': 'pre-mfa-token',
+          'siguientePaso': 'MFA_CHALLENGE_REQUIRED',
         }, 200),
       );
       final config = EnvConfig.parse(

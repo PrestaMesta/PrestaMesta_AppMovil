@@ -1,14 +1,10 @@
 import 'dart:convert';
 
-import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prestamesta_app/core/storage/secure_storage.dart';
 import 'package:prestamesta_app/core/storage/session_local_storage.dart';
-import 'package:prestamesta_app/features/auth/data/auth_repository.dart';
 import 'package:prestamesta_app/features/auth/presentation/auth_controller.dart';
 import 'package:prestamesta_app/features/auth/presentation/auth_state.dart';
-
-import '../../../support/fake_http_client_adapter.dart';
 
 /// In-memory double — never touches the platform's real secure storage.
 class FakeSecureStorage implements SecureStorage {
@@ -32,27 +28,32 @@ String _fakeJwt({required int expEpochSeconds}) {
   return '$header.$payload.sig';
 }
 
-AuthRepository _repositoryRespondingWith(
-    ResponseBody Function(RequestOptions) responder) {
-  final dio = Dio(BaseOptions(baseUrl: 'https://api.test'))
-    ..httpClientAdapter = FakeHttpClientAdapter(responder);
-  return AuthRepository(dio);
-}
-
 const _cliente =
     ClienteSummary(id: 1, nombre: 'Juan Pérez', email: 'juan@example.com');
 
 Future<void> _pump() => Future<void>.delayed(Duration.zero);
 
+/// `AuthController` no longer owns the password check (see
+/// `mfa_controller_test.dart` for that) — it only restores, adopts a
+/// finished session via [AuthController.completeMfaLogin] (the same seam
+/// `MfaController` calls once MFA succeeds), and ends one. [clearMfaFlow] is
+/// counted so tests can prove `logout()` always calls it.
+AuthController _controller({
+  required SessionLocalStorage sessionStorage,
+  void Function()? clearMfaFlow,
+}) {
+  return AuthController(
+    sessionStorage: sessionStorage,
+    clearMfaFlow: clearMfaFlow ?? () {},
+  );
+}
+
 void main() {
   group('AuthController restoration', () {
     test('starts as restoring, then unauthenticated when storage is empty',
         () async {
-      final controller = AuthController(
-        authRepository:
-            _repositoryRespondingWith((_) => throw StateError('unused')),
-        sessionStorage: SessionLocalStorage(FakeSecureStorage()),
-      );
+      final controller =
+          _controller(sessionStorage: SessionLocalStorage(FakeSecureStorage()));
       expect(controller.state.status, AuthStatus.restoring);
 
       await _pump();
@@ -70,11 +71,7 @@ void main() {
       await storage.saveSession(
           token: _fakeJwt(expEpochSeconds: futureExp), cliente: _cliente);
 
-      final controller = AuthController(
-        authRepository:
-            _repositoryRespondingWith((_) => throw StateError('unused')),
-        sessionStorage: storage,
-      );
+      final controller = _controller(sessionStorage: storage);
       await _pump();
 
       expect(controller.state.status, AuthStatus.authenticated);
@@ -90,11 +87,7 @@ void main() {
       await storage.saveSession(
           token: _fakeJwt(expEpochSeconds: pastExp), cliente: _cliente);
 
-      final controller = AuthController(
-        authRepository:
-            _repositoryRespondingWith((_) => throw StateError('unused')),
-        sessionStorage: storage,
-      );
+      final controller = _controller(sessionStorage: storage);
       await _pump();
 
       expect(controller.state.status, AuthStatus.unauthenticated);
@@ -109,11 +102,7 @@ void main() {
       await fakeStorage.write('session_token', 'some-token');
       final storage = SessionLocalStorage(fakeStorage);
 
-      final controller = AuthController(
-        authRepository:
-            _repositoryRespondingWith((_) => throw StateError('unused')),
-        sessionStorage: storage,
-      );
+      final controller = _controller(sessionStorage: storage);
       await _pump();
 
       expect(controller.state.status, AuthStatus.unauthenticated);
@@ -121,94 +110,28 @@ void main() {
     });
   });
 
-  group('AuthController.login', () {
-    test('success: transitions to authenticated and persists the session',
-        () async {
+  group('AuthController.completeMfaLogin', () {
+    test(
+        'transitions to authenticated and persists the session — the only '
+        'way a session is created outside restoration', () async {
       final storage = SessionLocalStorage(FakeSecureStorage());
-      final controller = AuthController(
-        authRepository: _repositoryRespondingWith(
-          (options) => jsonResponseBody({
-            'mensaje': 'ok',
-            'token': _fakeJwt(
-              expEpochSeconds: DateTime.now()
-                      .add(const Duration(hours: 1))
-                      .millisecondsSinceEpoch ~/
-                  1000,
-            ),
-            'cliente': {
-              'id': 1,
-              'nombre': 'Juan Pérez',
-              'email': 'juan@example.com'
-            },
-          }, 200),
-        ),
-        sessionStorage: storage,
-      );
+      final controller = _controller(sessionStorage: storage);
       await _pump();
+      expect(controller.state.status, AuthStatus.unauthenticated);
 
-      await controller.login(
-          email: 'juan@example.com', password: 'ClaveSegura123');
+      await controller.completeMfaLogin(
+        token: _fakeJwt(
+            expEpochSeconds: DateTime.now()
+                    .add(const Duration(hours: 1))
+                    .millisecondsSinceEpoch ~/
+                1000),
+        cliente: _cliente,
+      );
 
       expect(controller.state.status, AuthStatus.authenticated);
+      expect(controller.state.cliente?.email, 'juan@example.com');
       expect(await storage.readToken(), isNotNull);
       expect((await storage.readCliente())?.email, 'juan@example.com');
-    });
-
-    test(
-        'failure (INVALID_CREDENTIALS): transitions to error, not authenticated',
-        () async {
-      final storage = SessionLocalStorage(FakeSecureStorage());
-      final controller = AuthController(
-        authRepository: _repositoryRespondingWith(
-          (options) => jsonResponseBody(
-            {
-              'mensaje': 'Credenciales inválidas.',
-              'codigo': 'INVALID_CREDENTIALS'
-            },
-            401,
-          ),
-        ),
-        sessionStorage: storage,
-      );
-      await _pump();
-
-      await controller.login(email: 'juan@example.com', password: 'wrong');
-
-      expect(controller.state.status, AuthStatus.error);
-      expect(controller.state.error?.codigo, 'INVALID_CREDENTIALS');
-      expect(await storage.readToken(), isNull);
-    });
-
-    test(
-        'a second concurrent login call while authenticating is ignored (no double submit)',
-        () async {
-      var callCount = 0;
-      final storage = SessionLocalStorage(FakeSecureStorage());
-      final controller = AuthController(
-        authRepository: _repositoryRespondingWith((options) {
-          callCount++;
-          return jsonResponseBody({
-            'mensaje': 'ok',
-            'token': _fakeJwt(
-              expEpochSeconds: DateTime.now()
-                      .add(const Duration(hours: 1))
-                      .millisecondsSinceEpoch ~/
-                  1000,
-            ),
-            'cliente': {'id': 1, 'nombre': 'Juan', 'email': 'juan@example.com'},
-          }, 200);
-        }),
-        sessionStorage: storage,
-      );
-      await _pump();
-
-      final first = controller.login(
-          email: 'juan@example.com', password: 'ClaveSegura123');
-      final second = controller.login(
-          email: 'juan@example.com', password: 'ClaveSegura123');
-      await Future.wait([first, second]);
-
-      expect(callCount, 1);
     });
   });
 
@@ -223,11 +146,7 @@ void main() {
                 1000),
         cliente: _cliente,
       );
-      final controller = AuthController(
-        authRepository:
-            _repositoryRespondingWith((_) => throw StateError('unused')),
-        sessionStorage: storage,
-      );
+      final controller = _controller(sessionStorage: storage);
       await _pump();
       expect(controller.state.status, AuthStatus.authenticated);
 
@@ -235,6 +154,30 @@ void main() {
 
       expect(controller.state.status, AuthStatus.unauthenticated);
       expect(await storage.readToken(), isNull);
+    });
+
+    test(
+        'also clears any pending MFA flow ("logout limpia también cualquier '
+        'flujo MFA pendiente")', () async {
+      final storage = SessionLocalStorage(FakeSecureStorage());
+      await storage.saveSession(
+        token: _fakeJwt(
+            expEpochSeconds: DateTime.now()
+                    .add(const Duration(hours: 1))
+                    .millisecondsSinceEpoch ~/
+                1000),
+        cliente: _cliente,
+      );
+      var clearMfaFlowCalls = 0;
+      final controller = _controller(
+        sessionStorage: storage,
+        clearMfaFlow: () => clearMfaFlowCalls++,
+      );
+      await _pump();
+
+      await controller.logout();
+
+      expect(clearMfaFlowCalls, 1);
     });
   });
 
@@ -249,11 +192,7 @@ void main() {
                 1000),
         cliente: _cliente,
       );
-      final controller = AuthController(
-        authRepository:
-            _repositoryRespondingWith((_) => throw StateError('unused')),
-        sessionStorage: storage,
-      );
+      final controller = _controller(sessionStorage: storage);
       await _pump();
       return controller;
     }
@@ -287,11 +226,7 @@ void main() {
     test('is a no-op when there is no authenticated session to reject',
         () async {
       final storage = SessionLocalStorage(FakeSecureStorage());
-      final controller = AuthController(
-        authRepository:
-            _repositoryRespondingWith((_) => throw StateError('unused')),
-        sessionStorage: storage,
-      );
+      final controller = _controller(sessionStorage: storage);
       await _pump();
       expect(controller.state.status, AuthStatus.unauthenticated);
 

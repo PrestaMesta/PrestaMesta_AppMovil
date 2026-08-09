@@ -57,6 +57,16 @@ AuthRepository _authRepository({required int clienteId}) {
 LoanRequest _request() =>
     LoanRequest(creditoId: 1, montoSolicitado: Decimal.parse('10000'));
 
+/// `AuthController._restore()` is async (reads token/cliente from storage);
+/// letting it finish *before* calling `completeMfaLogin` avoids a race where
+/// restore's own (later-resolving) unauthenticated result would otherwise
+/// stomp on the session `completeMfaLogin` just established.
+Future<void> _pump([int times = 5]) async {
+  for (var i = 0; i < times; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
 void main() {
   test(
       'after an outcomeUnknown, logging out and back in yields a fresh, '
@@ -81,9 +91,13 @@ void main() {
     ]);
     addTearDown(container.dispose);
 
-    await container
-        .read(authControllerProvider.notifier)
-        .login(email: 'juan@x.com', password: 'ClaveSegura123');
+    container.read(authControllerProvider);
+    await _pump();
+
+    await container.read(authControllerProvider.notifier).completeMfaLogin(
+        token: _token(1),
+        cliente:
+            const ClienteSummary(id: 1, nombre: 'Juan', email: 'juan@x.com'));
     await container
         .read(loanSubmissionControllerProvider.notifier)
         .submit(_request());
@@ -98,9 +112,10 @@ void main() {
     expect(callCount, 1, reason: 'blocked: no second network call');
 
     await container.read(authControllerProvider.notifier).logout();
-    await container
-        .read(authControllerProvider.notifier)
-        .login(email: 'juan@x.com', password: 'ClaveSegura123');
+    await container.read(authControllerProvider.notifier).completeMfaLogin(
+        token: _token(1),
+        cliente:
+            const ClienteSummary(id: 1, nombre: 'Juan', email: 'juan@x.com'));
 
     // A fresh controller for the (re-)authenticated client id — idle again,
     // not outcomeUnknown, and able to submit.

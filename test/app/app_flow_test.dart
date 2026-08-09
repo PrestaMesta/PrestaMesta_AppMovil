@@ -62,11 +62,24 @@ String _validToken() {
       })}.${encode({'sub': 1, 'exp': exp})}.sig';
 }
 
-ResponseBody _successfulLoginResponse(RequestOptions options) {
+/// Since Checkpoint 6D a correct password only starts the mandatory MFA
+/// flow (see `features/auth/data/mfa_models.dart`) — this fake answers
+/// `POST /client/auth/login` with `siguientePaso: MFA_CHALLENGE_REQUIRED`
+/// (the simpler of the two paths; enrollment is covered by
+/// `test/features/auth/**`) and `POST /client/auth/mfa/verify` with a real
+/// session for any code, so `_login` below can complete the full flow.
+ResponseBody _mfaAwareLoginResponder(RequestOptions options) {
+  if (options.path == '/client/auth/mfa/verify') {
+    return jsonResponseBody({
+      'mensaje': 'Autenticación exitosa',
+      'token': _validToken(),
+      'cliente': {'id': 1, 'nombre': 'Juan', 'email': 'juan@example.com'},
+    }, 200);
+  }
   return jsonResponseBody({
-    'mensaje': 'Autenticación exitosa',
-    'token': _validToken(),
-    'cliente': {'id': 1, 'nombre': 'Juan', 'email': 'juan@example.com'},
+    'mensaje': 'Verifica tu identidad para continuar.',
+    'preMfaToken': 'pre-mfa-token',
+    'siguientePaso': 'MFA_CHALLENGE_REQUIRED',
   }, 200);
 }
 
@@ -95,6 +108,18 @@ Future<void> _login(WidgetTester tester) async {
   await tester.enterText(find.byType(TextFormField).at(1), 'ClaveSegura123');
   await tester.tap(find.text('Entrar'));
   await tester.pumpAndSettle();
+
+  // Only continue into the MFA challenge when the password step actually
+  // succeeded (some callers deliberately test a failed password check,
+  // which never leaves the login screen at all) — the fake backend always
+  // answers MFA_CHALLENGE_REQUIRED and accepts any 6-digit code on success,
+  // see `_mfaAwareLoginResponder`.
+  if (find.text('Verificar').evaluate().isNotEmpty) {
+    await tester.enterText(find.byType(TextFormField).first, '123456');
+    await tester.ensureVisible(find.text('Verificar'));
+    await tester.tap(find.text('Verificar'));
+    await tester.pumpAndSettle();
+  }
 }
 
 void main() {
@@ -111,7 +136,7 @@ void main() {
   testWidgets('successful login navigates into the shell with all five tabs',
       (tester) async {
     await _pumpApp(tester,
-        authRepository: _repository(_successfulLoginResponse));
+        authRepository: _repository(_mfaAwareLoginResponder));
 
     await _login(tester);
 
@@ -184,7 +209,7 @@ void main() {
       'switching tabs keeps each branch mounted (StatefulShellRoute keeps state)',
       (tester) async {
     await _pumpApp(tester,
-        authRepository: _repository(_successfulLoginResponse));
+        authRepository: _repository(_mfaAwareLoginResponder));
     await _login(tester);
 
     await tester.tap(find.text('Perfil'));
@@ -201,7 +226,7 @@ void main() {
       'logout from the profile tab clears the session and returns to login',
       (tester) async {
     await _pumpApp(tester,
-        authRepository: _repository(_successfulLoginResponse));
+        authRepository: _repository(_mfaAwareLoginResponder));
     await _login(tester);
 
     await tester.tap(find.text('Perfil'));
@@ -222,7 +247,7 @@ void main() {
   testWidgets('after logout, the system back gesture does not reopen the shell',
       (tester) async {
     await _pumpApp(tester,
-        authRepository: _repository(_successfulLoginResponse));
+        authRepository: _repository(_mfaAwareLoginResponder));
     await _login(tester);
 
     await tester.tap(find.text('Perfil'));

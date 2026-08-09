@@ -43,15 +43,27 @@ String _validToken() {
   return '${encode({'alg': 'HS256'})}.${encode({'sub': 1, 'exp': exp})}.sig';
 }
 
+/// Since Checkpoint 6D a correct password only starts the mandatory MFA
+/// flow — this fake answers login with `siguientePaso: MFA_CHALLENGE_REQUIRED`
+/// and accepts any code on `mfa/verify`, so `_loginAndReachReview` below can
+/// complete a full login without this file's tests (which are about the
+/// loan submission flow, not MFA) needing to know MFA mechanics.
 AuthRepository _authRepository() {
   final dio = Dio(BaseOptions(baseUrl: 'https://api.test'))
-    ..httpClientAdapter = FakeHttpClientAdapter(
-      (options) => jsonResponseBody({
-        'mensaje': 'ok',
-        'token': _validToken(),
-        'cliente': {'id': 1, 'nombre': 'Juan', 'email': 'juan@example.com'},
-      }, 200),
-    );
+    ..httpClientAdapter = FakeHttpClientAdapter((options) {
+      if (options.path == '/client/auth/mfa/verify') {
+        return jsonResponseBody({
+          'mensaje': 'ok',
+          'token': _validToken(),
+          'cliente': {'id': 1, 'nombre': 'Juan', 'email': 'juan@example.com'},
+        }, 200);
+      }
+      return jsonResponseBody({
+        'mensaje': 'Verifica tu identidad para continuar.',
+        'preMfaToken': 'pre-mfa-token',
+        'siguientePaso': 'MFA_CHALLENGE_REQUIRED',
+      }, 200);
+    });
   return AuthRepository(dio);
 }
 
@@ -133,6 +145,10 @@ Future<void> _loginAndReachReview(WidgetTester tester,
   await tester.enterText(find.byType(TextFormField).first, 'juan@example.com');
   await tester.enterText(find.byType(TextFormField).at(1), 'ClaveSegura123');
   await tester.tap(find.text('Entrar'));
+  await tester.pumpAndSettle();
+  await tester.enterText(find.byType(TextFormField).first, '123456');
+  await tester.ensureVisible(find.text('Verificar'));
+  await tester.tap(find.text('Verificar'));
   await tester.pumpAndSettle();
 
   await tester.tap(find.text('Simulación'));

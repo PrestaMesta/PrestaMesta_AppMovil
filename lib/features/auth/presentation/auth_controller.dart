@@ -1,23 +1,24 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/providers.dart';
-import '../../../core/errors/app_exception.dart';
 import '../../../core/storage/session_local_storage.dart';
 import '../../../core/utils/jwt_utils.dart';
-import '../data/auth_models.dart';
-import '../data/auth_repository.dart';
 import 'auth_state.dart';
+import 'mfa_controller.dart';
 
 final StateNotifierProvider<AuthController, AuthState> authControllerProvider =
     StateNotifierProvider<AuthController, AuthState>((ref) {
   return AuthController(
-    authRepository: ref.watch(authRepositoryProvider),
     sessionStorage: ref.watch(sessionLocalStorageProvider),
+    clearMfaFlow: () => ref.read(mfaControllerProvider.notifier).abandon(),
   );
 });
 
-/// Owns the app's one session state machine. The presentation layer only
-/// ever talks to this controller — never to `Dio`/`SecureStorage` directly.
+/// Owns the app's one session state machine. Checking a password and
+/// completing MFA are `MfaController`'s job now (`mfa_controller.dart`) —
+/// this class only ever knows about a *finished* session: restoring one on
+/// launch, adopting one once MFA succeeds ([completeMfaLogin]), and ending
+/// one (explicit [logout] or a server-side rejection).
 ///
 /// Restoration is **local-only** by design (no `GET /client/me` exists to
 /// call): it trusts a stored token until either the JWT's own `exp` claim
@@ -26,15 +27,15 @@ final StateNotifierProvider<AuthController, AuthState> authControllerProvider =
 /// failure, a 403, or a 500 must never clear a locally-plausible session —
 /// this class never does that.
 class AuthController extends StateNotifier<AuthState> {
-  final AuthRepository _authRepository;
   final SessionLocalStorage _sessionStorage;
+  final void Function() _clearMfaFlow;
   bool _isHandlingSessionRejection = false;
 
-  AuthController(
-      {required AuthRepository authRepository,
-      required SessionLocalStorage sessionStorage})
-      : _authRepository = authRepository,
-        _sessionStorage = sessionStorage,
+  AuthController({
+    required SessionLocalStorage sessionStorage,
+    required void Function() clearMfaFlow,
+  })  : _sessionStorage = sessionStorage,
+        _clearMfaFlow = clearMfaFlow,
         super(const AuthState.restoring()) {
     _restore();
   }
@@ -58,26 +59,24 @@ class AuthController extends StateNotifier<AuthState> {
     state = AuthState.authenticated(cliente);
   }
 
-  Future<void> login({required String email, required String password}) async {
-    if (state.status == AuthStatus.authenticating) {
-      return; // defense in depth; the UI also disables the button
-    }
-
-    state = const AuthState.authenticating();
-    try {
-      final result = await _authRepository
-          .login(LoginRequest(email: email, password: password));
-      await _sessionStorage.saveSession(
-          token: result.token, cliente: result.cliente);
-      state = AuthState.authenticated(result.cliente);
-    } on AppException catch (error) {
-      state = AuthState.error(error);
-    }
+  /// Called by `MfaController` once `mfa/enroll/confirm` or `mfa/verify`
+  /// returns a real session token — this is the **only** place a session
+  /// gets created outside restoration. Persists it via the existing
+  /// `SessionLocalStorage` exactly like the pre-MFA login used to.
+  Future<void> completeMfaLogin(
+      {required String token, required ClienteSummary cliente}) async {
+    await _sessionStorage.saveSession(token: token, cliente: cliente);
+    state = AuthState.authenticated(cliente);
   }
 
   Future<void> logout() async {
     await _sessionStorage.clear();
     state = const AuthState.unauthenticated();
+    // Defensive: a normal logout only ever happens from an already-idle MFA
+    // flow (MfaController resets itself right after completeMfaLogin), but
+    // this guarantees no pending pre-MFA token/recovery codes can ever
+    // survive a logout regardless of how it was triggered.
+    _clearMfaFlow();
   }
 
   /// Called by `core/network/auth_interceptor.dart` (wired in
